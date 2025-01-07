@@ -4,3 +4,8 @@ models
 datasets
 outputs/
 logs/
+longdep_qa.jsonl
+run.sh
+.gitignore
+lift/__pycache__
+lift/*/__pycache__
