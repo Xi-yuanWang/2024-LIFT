@@ -1,0 +1,10 @@
+**/logs/
+**/outputs/
+**/datasets/
+**/__pycache__/
+pissa/
+tmp_scripts/
+lift.egg-info
+utils.sh
+test.csv
+api_key.txt
