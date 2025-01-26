@@ -152,6 +152,7 @@ class NIAHArgs:
     zh: bool = field(default=False, metadata={'help': 'Eval Chinese Text.'})
     num_syn_qa: int = field(default=0, metadata={'help': "The number of synthetic QA pairs."})
     syn_qa_needle_path: Optional[str] = field(default=None, metadata={'help': "The path to the prompts and the corresponding needles for TTT."})
+    use_icl: bool = field(default=True)
     
     def to_dict(self):
         return asdict(self)
@@ -174,7 +175,7 @@ class NIAHArgs:
 
 
 class NeedleContextDataset(ICLContextDataset):
-    def __init__(self, context: str, tokenizer: PreTrainedTokenizer, syn_qa_tasks: Optional[List], num_syn_qa: int, model_max_length: int, block_size: int, len_segment: int, len_offset: int):
+    def __init__(self, context: str, tokenizer: PreTrainedTokenizer, syn_qa_tasks: Optional[List], num_syn_qa: int, model_max_length: int, block_size: int, len_segment: int, len_offset: int, use_icl: bool=True):
         # insert synthetic needles into context
         if num_syn_qa > 0:
             sentences = sent_tokenize(context)
@@ -187,11 +188,18 @@ class NeedleContextDataset(ICLContextDataset):
         super().__init__(context, tokenizer, model_max_length, block_size, len_segment, len_offset)
         if num_syn_qa > 0:
             for item in syn_qa_tasks:
-                messages = [
-                    {'role': 'system', 'content': "You are a helpful assistant."},
-                    {'role': 'user', 'content': item['prompt']},
-                    {'role': 'assistant', 'content': item['needle']}
-                ]
+                if use_icl:
+                    messages = [
+                        {'role': 'system', 'content': "You are a helpful assistant."},
+                        {'role': 'user', 'content': NIAHFORMAT_EN.format(context=context, prompt=item['prompt'])},
+                        {'role': 'assistant', 'content': item['needle']}
+                    ]
+                else:
+                    messages = [
+                        {'role': 'system', 'content': "You are a helpful assistant."},
+                        {'role': 'user', 'content': item['prompt']},
+                        {'role': 'assistant', 'content': item['needle']}
+                    ]
                 input_length = len(tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True))
                 input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=False)
                 output_length = len(input_ids) - input_length
@@ -250,8 +258,8 @@ def generate_sample(tokenizer: PreTrainedTokenizer, context: str, context_length
     return inputs, context_return, needle
 
 
-def NIAH_Train(context: str, tokenizer: PreTrainedTokenizer, syn_qa_tasks: Optional[List], num_syn_qa: int, training_args: TrainingArguments, model_max_length: int, block_size: int, len_segment: int, len_offset: int, involve_qa_epochs: int, gather_batches: bool, model_name_or_path: str, use_lora: bool, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, use_gated_memory: bool=False, **_):
-    context_dataset = NeedleContextDataset(context, tokenizer, syn_qa_tasks, num_syn_qa, model_max_length, block_size, len_segment, len_offset)
+def NIAH_Train(context: str, tokenizer: PreTrainedTokenizer, syn_qa_tasks: Optional[List], num_syn_qa: int, training_args: TrainingArguments, model_max_length: int, block_size: int, len_segment: int, len_offset: int, involve_qa_epochs: int, gather_batches: bool, model_name_or_path: str, use_lora: bool, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, use_gated_memory: bool=False, use_icl: bool=True, **_):
+    context_dataset = NeedleContextDataset(context, tokenizer, syn_qa_tasks, num_syn_qa, model_max_length, block_size, len_segment, len_offset, use_icl=use_icl)
     model = load_model(
         model_name_or_path=model_name_or_path,
         use_lora=use_lora,
@@ -320,6 +328,7 @@ def generate_niah_input(niah_args: NIAHArgs, tokenizer: PreTrainedTokenizer):
 
 def main():
     (niah_args, training_args, lift_args), config = parse_args((NIAHArgs, TrainingArguments, (ModelArguments, CustomTrainingArguments, DataTrainingArguments)), no_dict=(TrainingArguments, NIAHArgs), return_config=True)
+    use_icl = niah_args.pop('use_icl')
     niah_args.needle = eval('\"\"\"' + niah_args.needle + '\"\"\"')
     niah_args.prompt = eval('\"\"\"' + niah_args.prompt + '\"\"\"')
     print(f"The prompt is:\n{niah_args.prompt}")
@@ -346,6 +355,7 @@ def main():
     else:
         lift_needle_tasks = None
 
+    mixin = tokenizer("...", add_special_tokens=False)['input_ids']
     for sample in tqdm(all_inputs, desc="Evaluating"):
         prompt = sample['prompt']
         context = sample['context']
@@ -355,17 +365,24 @@ def main():
             syn_qa_tasks=lift_needle_tasks,
             num_syn_qa=niah_args.num_syn_qa,
             training_args=training_args,
+            use_icl=use_icl,
             **lift_args
         )
         model.eval()
         with torch.no_grad():
-            messages = [
-                {'role': 'system', 'content': "You are a helpful assistant."},
-                {'role': 'user', 'content': NIAHFORMAT_EN.format(context=context, prompt=prompt)}
-            ]
+            if use_icl:
+                messages = [
+                    {'role': 'system', 'content': "You are a helpful assistant."},
+                    {'role': 'user', 'content': NIAHFORMAT_EN.format(context=context, prompt=prompt)}
+                ]
+            else:
+                messages = [
+                    {'role': 'system', 'content': "You are a helpful assistant."},
+                    {'role': 'user', 'content': prompt}
+                ]
             input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors='pt')
             if input_ids.shape[-1] > model_max_length:
-                input_ids = torch.concat((input_ids[:, :model_max_length//2], input_ids[:, -model_max_length//2:]), dim=-1)
+                input_ids = torch.concat((input_ids[:, :model_max_length//2 - len(mixin)], mixin, input_ids[:, -model_max_length//2:]), dim=-1)
             input_ids = input_ids.to(model.device)
             attention_mask = torch.ones_like(input_ids)
             output_ids = model.generate(
