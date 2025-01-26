@@ -104,15 +104,13 @@ def main(args):
     else:
         with open(args.cache_input_path, "rb") as f:
             all_inputs = pickle.load(f)
-    
-    num_test = len(all_inputs)
 
     # split input data
     mp_input_data = [[] for _ in range(args.num_process)]
     for i, d in enumerate(all_inputs):
         mp_input_data[i % args.num_process].append(d)
 
-    mp_cache_input_paths = prepare_split_filename(MP_INPUT_DIR, args.cache_input_path, args.num_test, args.num_process)
+    mp_cache_input_paths = prepare_split_filename(MP_INPUT_DIR, args.cache_input_path, args.num_process)
     print('mp_cache_input_paths: ', mp_cache_input_paths)
 
     for mp_cache_input_path, mp_input_d in zip(mp_cache_input_paths, mp_input_data):
@@ -120,7 +118,7 @@ def main(args):
             pickle.dump(all_inputs, f, protocol=pickle.HIGHEST_PROTOCOL)
     
     # prepare output filename
-    mp_output_paths = prepare_split_filename(MP_OUTPUT_DIR, args.output_path, args.num_test, args.num_process)
+    mp_output_paths = prepare_split_filename(MP_OUTPUT_DIR, args.output_path, args.num_process)
     print('mp_output_paths: ', mp_output_paths)
 
     # run subprocess 
@@ -134,8 +132,8 @@ def main(args):
     # collect output
     collect_output(args.output_path, mp_output_paths, args.num_process)
 
-def prepare_split_filename(dir, file_path, num_test, num_process):
-    return [os.path.join(dir, f'{os.path.basename(file_path)}_num_{num_test}_{i}_in_{num_process}') for i in range(num_process)]
+def prepare_split_filename(dir, file_path, num_process):
+    return [os.path.join(dir, f'{os.path.basename(file_path)}_{i}_in_{num_process}') for i in range(num_process)]
 
 def collect_output(output_path, mp_output_paths, num_process):
     mp_output_res = [[] for _ in range(num_process)]
@@ -161,7 +159,6 @@ def run_command(rank: int, args, cache_input_path, output_path):
     command = ['python', args.script] + args.subprocess_args \
                 + ['--cache_input_path', cache_input_path,
                    '--output_path', output_path,
-                   '--num_test', args.num_test,
                    '--haystack_path', args.haystack_path,
                    '--num_samples_per_case', args.num_samples_per_case,
                    '--test_length', args.test_length,
@@ -181,7 +178,6 @@ if __name__ == '__main__':
 
     parser.add_argument('--cache_input_path', type=str, required=True)
     parser.add_argument('--output_path', type=str, required=True)
-    parser.add_argument('--num_test', type=int, default=None)
 
     parser.add_argument('--haystack_path', type=str, default="long-llm:needle/PaulGrahamEssays")
     parser.add_argument('--num_samples_per_case', type=int, default=1)
