@@ -328,7 +328,7 @@ def generate_niah_input(niah_args: NIAHArgs, tokenizer: PreTrainedTokenizer):
 
 def main():
     (niah_args, training_args, lift_args), config = parse_args((NIAHArgs, TrainingArguments, (ModelArguments, CustomTrainingArguments, DataTrainingArguments)), no_dict=(TrainingArguments, NIAHArgs), return_config=True)
-    use_icl = niah_args.pop('use_icl')
+    use_icl = niah_args.use_icl
     niah_args.needle = eval('\"\"\"' + niah_args.needle + '\"\"\"')
     niah_args.prompt = eval('\"\"\"' + niah_args.prompt + '\"\"\"')
     print(f"The prompt is:\n{niah_args.prompt}")

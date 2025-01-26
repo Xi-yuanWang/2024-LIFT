@@ -161,13 +161,14 @@ def run_command(rank: int, args, cache_input_path, output_path):
                    '--output_path', output_path,
                    '--haystack_path', args.haystack_path,
                    '--num_samples_per_case', args.num_samples_per_case,
-                   '--test_length', args.test_length,
-                   '--test_depth', args.test_depth,
+                   '--test_length', *args.test_length,
+                   '--test_depth', *args.test_depth,
                    '--needle', args.needle,
                    '--prompt', args.prompt,
                    '--zh', args.zh,
                    '--model_name_or_path', args.model_name_or_path,
                    ]
+    command = list(map(str, command))
     print('command: ', command)
     return subprocess.Popen(command, env=env)
 
