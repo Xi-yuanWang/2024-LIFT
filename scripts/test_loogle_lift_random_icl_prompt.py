@@ -129,7 +129,7 @@ class ICLContextDataset(Dataset):
         raise NotImplementedError
 
 
-
+LOOGLEFORMAT_NON_ICL = "Based on the article {title}, please answer the following question: {question}"
 LOOGLEFORMAT = "The article {title}: \n{input}\nPlease answer the question based on {title}.\nQuestion: {question}\nAnswer: "
 LOOGLEFORMAT_COT = """The article {title}:
 {input}
@@ -159,10 +159,11 @@ class TestArguments:
     generator_name_or_path: Optional[str] = field(default=None, metadata={"help": "The generator model name or path."})
     use_cot: bool = field(default=False, metadata={'help': "Whether to use CoT in syn. QA and test."})
     num_test: Optional[int] = field(default=None, metadata={'help': "Test only the first several articles."})
+    use_icl: bool = field(default=True, metadata={'help': "Whether to use ICL when training and testing."})
 
 
 class LooGLEDataset(ICLContextDataset):
-    def __init__(self, context: str, title: str, tokenizer: PreTrainedTokenizer, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_cot: bool=False):
+    def __init__(self, context: str, title: str, tokenizer: PreTrainedTokenizer, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_cot: bool=False, use_icl: bool=True):
         # Option 1: prepend title before context
         if title_option == 1:
             context = title + '\n' + context
@@ -193,13 +194,13 @@ class LooGLEDataset(ICLContextDataset):
             )
             generator.eval()
             for _ in range(num_syn_qa):
-                result = self.generate_task(generator, context, context_sent, title, model_max_length, use_cot)
+                result = self.generate_task(generator, context, context_sent, title, model_max_length, use_cot, use_icl=use_icl)
                 if result is not None:
                     self.data.append(result)
         self.enable_qa_tag = False
     
     @torch.no_grad()
-    def generate_task(self, generator: PreTrainedModel, full_context: str, context_sent: List[str], title: str, model_max_length: int, use_cot: bool=False):
+    def generate_task(self, generator: PreTrainedModel, full_context: str, context_sent: List[str], title: str, model_max_length: int, use_cot: bool=False, use_icl: bool=True):
         st_pos = randint(0, len(context_sent) - 16)
         context = ' '.join(context_sent[st_pos:st_pos+16])
         messages = [
@@ -239,11 +240,16 @@ class LooGLEDataset(ICLContextDataset):
         else:
             logging.warning("Fail to generate a QA pair, skip.")
             return None
-        if use_cot:
-            input_text = LOOGLEFORMAT_COT.format(title=title, input=full_context, question=question)
-            answer = evidence + "\n# Answer:\n" + answer + "\n# End of answer"
+        
+        if not use_icl:
+            input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=question)
         else:
-            input_text = LOOGLEFORMAT.format(title=title, input=full_context, question=question)
+            if use_cot:
+                input_text = LOOGLEFORMAT_COT.format(title=title, input=full_context, question=question)
+                answer = evidence + "\n# Answer:\n" + answer + "\n# End of answer"
+            else:
+                input_text = LOOGLEFORMAT.format(title=title, input=full_context, question=question)
+
         example = input_text + ' ' + answer
         input_ids = self.tokenizer(example, add_special_tokens=False)['input_ids']
         input_length = len(self.tokenizer(input_text, add_special_tokens=False)['input_ids']) 
@@ -264,14 +270,14 @@ class LooGLEDataset(ICLContextDataset):
         return len(self.data) if self.enable_qa_tag else self.num_segments
     
     
-def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_gated_memory: bool=False, use_cot: bool=False, **kwargs):
-    dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot)
+def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_gated_memory: bool=False, use_cot: bool=False, use_icl: bool=True, **kwargs):
+    dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
     model = load_model(model_name_or_path=model_name_or_path, use_lora=use_lora, lora_rank=lora_rank, use_pissa=use_pissa, load_in_4bit=load_in_4bit, vocab_size=len(tokenizer), use_gated_memory=use_gated_memory)
     model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
     return model
 
 
-def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Dict, output_file: str, num_resumed: int=0, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_cot: bool=False):
+def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Dict, output_file: str, num_resumed: int=0, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_cot: bool=False, use_icl: bool=True):
     tokenizer = load_tokenizer(lift_args['tokenizer_name_or_path'])
     mixin = tokenizer("...", add_special_tokens=False)['input_ids']
     model_max_length = lift_args['model_max_length']
@@ -283,13 +289,19 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
         title = sample['title']
         # qa_pairs = sample['test_qa_pairs']
         qa_pairs = eval(sample['qa_pairs'])
-        model = LooGLEtrain(context, title, tokenizer, training_args=training_args, num_syn_qa=num_syn_qa, title_option=title_option, generator_name_or_path=generator_name_or_path, use_cot=use_cot, **lift_args)
+        model = LooGLEtrain(context, title, tokenizer, training_args=training_args, num_syn_qa=num_syn_qa, title_option=title_option, generator_name_or_path=generator_name_or_path, use_cot=use_cot, use_icl=use_icl, **lift_args)
         model.eval()
         for qa_pair in tqdm.tqdm(qa_pairs, desc="QA Pair"):
-            if use_cot:
-                input_text = LOOGLEFORMAT_COT.format(title=title, input=context, question=qa_pair['Q'])
+
+            if not use_icl:
+                input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=qa_pair['Q'])
             else:
-                input_text = LOOGLEFORMAT.format(title=title, input=context, question=qa_pair['Q'])
+                if use_cot:
+                    input_text = LOOGLEFORMAT_COT.format(title=title, input=context, question=qa_pair['Q'])
+                else:
+                    input_text = LOOGLEFORMAT.format(title=title, input=context, question=qa_pair['Q'])
+
+            print(f'input_text: {input_text}')
             input_ids = tokenizer(input_text, add_special_tokens=False)['input_ids']
             if len(input_ids) > model_max_length:
                 input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
@@ -325,6 +337,11 @@ def main():
     output_file = test_args.pop('output_file')
     overwrite = test_args.pop('overwrite')
     num_test = test_args.pop('num_test')
+    use_icl = test_args.pop('use_icl')
+
+    if not use_icl:
+        assert test_args['use_cot'] is False, "CoT is not supported in non-ICL mode."
+
     num_resumed = 0
     if os.path.exists(output_file):
         if overwrite:
@@ -336,7 +353,7 @@ def main():
         input_data = [json.loads(line) for line in f]
     if num_test is not None:
         input_data = input_data[:num_test]
-    prediction(input_data, training_args, lift_args, output_file, num_resumed=num_resumed, **test_args)
+    prediction(input_data, training_args, lift_args, output_file, num_resumed=num_resumed, use_icl=use_icl, **test_args)
 
 
 if __name__ == '__main__':
