@@ -181,7 +181,7 @@ class NeedleContextDataset(ICLContextDataset):
             syn_qa_tasks = np.random.choice(syn_qa_tasks, num_syn_qa, replace=False)
             for item in syn_qa_tasks:
                 random_pos = np.random.randint(0, len(sentences))
-                sentences.insert(random_pos, '*' * 20 + item['needle'])
+                sentences.insert(random_pos, item['needle'])
             context = ' '.join(sentences)
         # generate the context dataset
         super().__init__(context, tokenizer, model_max_length, block_size, len_segment, len_offset)
