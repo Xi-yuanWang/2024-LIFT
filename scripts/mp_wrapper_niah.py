@@ -104,7 +104,8 @@ def main(args):
     else:
         with open(args.cache_input_path, "rb") as f:
             all_inputs = pickle.load(f)
-
+    
+    num_test = len(all_inputs)
 
     # split input data
     mp_input_data = [[] for _ in range(args.num_process)]
