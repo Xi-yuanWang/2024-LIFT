@@ -250,6 +250,7 @@ class LooGLEDataset(ICLContextDataset):
             else:
                 input_text = LOOGLEFORMAT.format(title=title, input=full_context, question=question)
 
+        print(f'syn input text: {input_text}')
         example = input_text + ' ' + answer
         input_ids = self.tokenizer(example, add_special_tokens=False)['input_ids']
         input_length = len(self.tokenizer(input_text, add_special_tokens=False)['input_ids']) 
