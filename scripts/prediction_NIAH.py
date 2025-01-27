@@ -187,6 +187,7 @@ class NeedleContextDataset(ICLContextDataset):
         # generate the context dataset
         super().__init__(context, tokenizer, model_max_length, block_size, len_segment, len_offset)
         if num_syn_qa > 0:
+            mixin = tokenizer("...", add_special_tokens=False)['input_ids']
             for item in syn_qa_tasks:
                 if use_icl:
                     messages = [
@@ -204,7 +205,7 @@ class NeedleContextDataset(ICLContextDataset):
                 input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=False)
                 output_length = len(input_ids) - input_length
                 if len(input_ids) > model_max_length:
-                    input_ids = input_ids[:model_max_length//2] + input_ids[-model_max_length//2:]
+                    input_ids = input_ids[:model_max_length//2-len(mixin)] + mixin + input_ids[-model_max_length//2:]
                     input_length = len(input_ids) - output_length
                 self.data.append((input_ids, input_length))
         self.enable_qa_tag = False
@@ -328,7 +329,7 @@ def generate_niah_input(niah_args: NIAHArgs, tokenizer: PreTrainedTokenizer):
 
 def main():
     (niah_args, training_args, lift_args), config = parse_args((NIAHArgs, TrainingArguments, (ModelArguments, CustomTrainingArguments, DataTrainingArguments)), no_dict=(TrainingArguments, NIAHArgs), return_config=True)
-    use_icl = niah_args.pop('use_icl')
+    use_icl = niah_args.use_icl
     niah_args.needle = eval('\"\"\"' + niah_args.needle + '\"\"\"')
     niah_args.prompt = eval('\"\"\"' + niah_args.prompt + '\"\"\"')
     print(f"The prompt is:\n{niah_args.prompt}")
@@ -355,7 +356,7 @@ def main():
     else:
         lift_needle_tasks = None
 
-    mixin = tokenizer("...", add_special_tokens=False)['input_ids']
+    mixin = tokenizer("...", add_special_tokens=False, return_tensors='pt')['input_ids'].reshape(1, -1)
     for sample in tqdm(all_inputs, desc="Evaluating"):
         prompt = sample['prompt']
         context = sample['context']
