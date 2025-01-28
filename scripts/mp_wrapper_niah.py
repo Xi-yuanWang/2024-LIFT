@@ -115,7 +115,7 @@ def main(args):
 
     for mp_cache_input_path, mp_input_d in zip(mp_cache_input_paths, mp_input_data):
         with open(mp_cache_input_path, 'wb') as f:
-            pickle.dump(all_inputs, f, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(mp_input_d, f, protocol=pickle.HIGHEST_PROTOCOL)
     
     # prepare output filename
     mp_output_paths = prepare_split_filename(MP_OUTPUT_DIR, args.output_path, args.num_process)

@@ -153,6 +153,7 @@ class NIAHArgs:
     num_syn_qa: int = field(default=0, metadata={'help': "The number of synthetic QA pairs."})
     syn_qa_needle_path: Optional[str] = field(default=None, metadata={'help': "The path to the prompts and the corresponding needles for TTT."})
     use_icl: bool = field(default=True)
+    overwrite: bool = field(default=False, metadata={'help': "Overwrite the output file if it exists."})
     
     def to_dict(self):
         return asdict(self)
@@ -341,6 +342,12 @@ def main():
     model_max_length = lift_args['model_max_length']
     output_path = niah_args.output_path
     cache_input_path = niah_args.cache_input_path
+    num_resumed = 0
+    if os.path.exists(output_path):
+        if niah_args.overwrite:
+            os.remove(output_path)
+        else:
+            num_resumed = len(open(output_path, 'r').readlines())
     
     # Load or create the input cache
     if cache_input_path is not None and os.path.exists(cache_input_path):
@@ -357,7 +364,7 @@ def main():
         lift_needle_tasks = None
 
     mixin = tokenizer("...", add_special_tokens=False, return_tensors='pt')['input_ids'].reshape(1, -1)
-    for sample in tqdm(all_inputs, desc="Evaluating"):
+    for sample in tqdm(all_inputs[num_resumed:], desc="Evaluating", initial=num_resumed, total=len(all_inputs)):
         prompt = sample['prompt']
         context = sample['context']
         model = NIAH_Train(
