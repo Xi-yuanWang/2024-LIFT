@@ -83,7 +83,7 @@ def run_command(rank: int, args, input_dir, output_file):
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(rank)
     command = ['python', args.script] + args.subprocess_args \
-                + ['--input_dir', input_dir, '--output_file', output_file]
+                + ['--input_dir', input_dir, '--output_path', output_file]
     print('command: ', command)
     return subprocess.Popen(command, env=env)
 

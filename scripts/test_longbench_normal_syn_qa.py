@@ -262,7 +262,6 @@ class LongBenchDataset(ICLContextDataset):
     
 
 def LongBenchtrain(context: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, use_gated_memory: bool=False, generator_name_or_path: Optional[str]=None, use_icl: bool=True, **kwargs):
-    dataset = LongBenchDataset(context, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, generator_name_or_path, use_icl)
     model = load_model(
         model_name_or_path=model_name_or_path,
         use_lora=use_lora,
@@ -272,14 +271,16 @@ def LongBenchtrain(context: str, tokenizer: PreTrainedTokenizer, model_name_or_p
         vocab_size=len(tokenizer),
         use_gated_memory=use_gated_memory
     )
-    model = train(
-        model=model,
-        dataset=dataset,
-        tokenizer=tokenizer,
-        training_args=training_args,
-        involve_qa_epochs=involve_qa_epochs,
-        gather_batches=gather_batches,
-    )[0]
+    if use_lora or use_gated_memory:
+        dataset = LongBenchDataset(context, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, generator_name_or_path, use_icl)
+        model = train(
+            model=model,
+            dataset=dataset,
+            tokenizer=tokenizer,
+            training_args=training_args,
+            involve_qa_epochs=involve_qa_epochs,
+            gather_batches=gather_batches,
+        )[0]
     return model
 
 
@@ -289,7 +290,7 @@ def prediction(data: List[Dict]=[], output_path: str="", num_syn_qa: int=0, trai
     model_max_length = lift_args['model_max_length']
     tokenizer = load_tokenizer(lift_args['tokenizer_name_or_path'])
     mixin = tokenizer("...", add_special_tokens=False, return_tensors='pt')['input_ids']
-    for sample in data:
+    for sample in tqdm.tqdm(data, desc="Predicting"):
         context, question = sample['context'], sample['input']
         messages = [
             {'role': 'system', 'content': "You are a helpful assistant."},
