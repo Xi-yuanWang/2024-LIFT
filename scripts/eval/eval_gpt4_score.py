@@ -24,7 +24,7 @@ def get_gpt4_score(question: str, reference: str, pred: str):
         + pred,
     }]
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4-0613",
         messages=prompt,
         max_tokens=10,
         temperature=0,
