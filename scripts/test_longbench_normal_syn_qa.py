@@ -24,8 +24,8 @@ from numpy.random import randint
 from nltk import sent_tokenize
 import logging
 import json
-import numpy as np
 import os
+import re
 import torch
 import tqdm
 from torch.utils.data import Dataset
@@ -191,6 +191,8 @@ class LongBenchDataset(ICLContextDataset):
     def generate_task(self, generator: PreTrainedModel, full_context: str="", context_sent: List[str]=[], model_max_length: int=None, use_icl: bool=True):
         st_pos = randint(0, len(context_sent) - 16)
         context = ' '.join(context_sent[st_pos:st_pos+16])
+        context = context.replace('\n', ' ')
+        context = re.sub(r'\s+', ' ', context)
         messages = [
             {
                 'role': "system",
