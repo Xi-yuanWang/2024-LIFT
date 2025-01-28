@@ -92,7 +92,7 @@ class ICLContextDataset(Dataset):
             b = tot_len - a
             return a, b
 
-        front_len, back_len = get_fix_length_segments(len_lift_icl, len_lift_icl, len_lift_icl)
+        front_len, back_len = get_fix_length_segments(len_lift_icl - 1, len_lift_icl - 1, len_lift_icl)
         front_st = randint(0, len_lift_icl - front_len)
         back_ed = randint(0, len_lift_icl - back_len)
 
@@ -200,7 +200,7 @@ class LongBenchDataset(ICLContextDataset):
             },
             {
                 'role': "user", 
-                'content': f"You are given a piece of text as the context. You should generate ONLY one question and the corresponding answer according to the context. You should also select one or more sentences directly from the original context as the evidence. The evidences must be verbatim sentences from the context. Please answer in the following format: \nQuestion: [question] \nAnswer: [answer] \nEvidence: [evidence]\nPlease DON'T output quotes when outputting evidences. The following is the piece of text: {context}"
+                'content': f"You are given a piece of text as the context. You should generate ONLY one question and the corresponding answer according to the context. You should also select one or more sentences directly from the original context as the evidence. The evidences must be EXACTLY SAME ADJACENT sentences retrieved from the context; KEEP the special tokens in the sentences. Please answer in the following format: \nQuestion: [question] \nAnswer: [answer] \nEvidence: [evidence]\nPlease DON'T output quotes when outputting evidences. The following is the piece of text: {context}"
             }
         ]
         input_ids = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(generator.device)
@@ -224,8 +224,8 @@ class LongBenchDataset(ICLContextDataset):
             question = response[question_position + 9:answer_position].strip()
             answer = response[answer_position + 7:evidence_position].strip()
             evidence = response[evidence_position + 9:].strip()
-            if evidence not in context:
-                continue
+            # if evidence not in context:
+            #     continue
             break
         else:
             logging.warning("Fail to generate a QA pair, skip.")
