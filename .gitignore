@@ -8,3 +8,5 @@ lift.egg-info
 utils.sh
 test.csv
 api_key.txt
+data/
+mp/
