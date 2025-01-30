@@ -135,12 +135,19 @@ SUBTASK_MAXLEN = {
     "qmsum": 512,
     "passage_retrieval_en": 32,
 }
-SUBTASK_PROMPTS = {
+SUBTASK_PROMPTS_ICL = {
     "narrativeqa": "You are given a story, which can be either a novel or a movie script, and a question. Answer the question asconcisely as you can, using a single phrase if possible. Do not provide any explanation.\n\nStory: {context}\n\nNow, answer the question based on the story asconcisely as you can, using a single phrase if possible. Do not provide any explanation.\n\nQuestion: {input}\n\nAnswer:",
     "musique": "Answer the question based on the given passages. Only give me the answer and do not output any other words.\n\nThe following are given passages.\n{context}\n\nAnswer the question based on the given passages. Only give me the answer and do not output any other words.\n\nQuestion: {input}\nAnswer:",
     "gov_report": "You are given a report by a government agency. Write a one-page summary of the report.\n\nReport:\n{context}\n\nNow, write a one-page summary of the report.\n\nSummary:",
     "qmsum": "You are given a meeting transcript and a query containing a question or instruction. Answer the query in one or more sentences.\n\nTranscript:\n{context}\n\nNow, answer the query based on the above meeting transcript in one or more sentences.\n\nQuery: {input}\nAnswer:",
     "passage_retrieval_en": "Here are 30 paragraphs from Wikipedia, along with an abstract. Please determine which paragraph the abstract is from.\n\n{context}\n\nThe following is an abstract.\n\n{input}\n\nPlease enter the number of the paragraph that the abstract is from. The answer format must be like \"Paragraph 1\", \"Paragraph 2\", etc.\n\nThe answer is: ",
+}
+SUBTASK_PROMPTS_NO_ICL = {
+    'narrativeqa': "Based on your knowledge of the story, please answer the question as concisely as you can, using a single phrase if possible. Do not provide any explanation.\n\nNow, answer the question based on the story you know as concisely as you can, using a single phrase if possible.\n\nQuestion: {input}\n\nAnswer:",
+    'musique': "Answer the question based on the passages you know. Only give me the answer and do not output any other words.\n\nQuestion: {input}\nAnswer:",
+    'gov_report': "Based on your knowledge of the report by a government agency, write a one-page summary of the report.\n\nNow, write a one-page summary of the report you know.\n\nSummary:",
+    'qmsum': "You are given a query containing a question or instruction. Based on the meeting transcript you know, answer the query in one or more sentences.\n\nNow, answer the query based on the meeting transcript you know in one or more sentences.\n\nQuery: {input}\nAnswer:",
+    "passage_retrieval_en": "You have known 30 paragraphs from Wikipedia, along with an abstract. Please determine which paragraph the abstract is from. The following is an abstract.\n\n{input}\n\nPlease enter the number of the paragraph that the abstract is from based on your knowledge of the 30 paragraphs. The answer format must be like \"Paragraph 1\", \"Paragraph 2\", etc.\n\nThe answer is: ",
 }
 SYNFORMAT_NON_ICL = "Please answer the following question: {question}"
 SYNFORMAT_ICL = "The article: \n{input}\nPlease answer the question based on the article.\nQuestion: {question}\nAnswer: "
@@ -285,7 +292,7 @@ def LongBenchtrain(context: str, tokenizer: PreTrainedTokenizer, model_name_or_p
 
 
 def prediction(data: List[Dict]=[], output_path: str="", num_syn_qa: int=0, training_args: TrainingArguments=None, lift_args: Dict=None, subtask_name: str=None, generator_name_or_path: Optional[str]=None, use_icl: bool=True):
-    prompt_template = SUBTASK_PROMPTS[subtask_name]
+    prompt_template = SUBTASK_PROMPTS_ICL[subtask_name] if use_icl else SUBTASK_PROMPTS_NO_ICL[subtask_name]
     max_new_tokens = SUBTASK_MAXLEN[subtask_name]
     model_max_length = lift_args['model_max_length']
     tokenizer = load_tokenizer(lift_args['tokenizer_name_or_path'])
