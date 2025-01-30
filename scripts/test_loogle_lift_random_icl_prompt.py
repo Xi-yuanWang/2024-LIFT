@@ -192,15 +192,16 @@ class LooGLEDataset(ICLContextDataset):
                     do_sample=False,
                 ),
             )
+            gen_tokenizer = load_tokenizer(generator_name_or_path)
             generator.eval()
             for _ in range(num_syn_qa):
-                result = self.generate_task(generator, context, context_sent, title, model_max_length, use_cot, use_icl=use_icl)
+                result = self.generate_task(generator, gen_tokenizer, context, context_sent, title, model_max_length, use_cot, use_icl=use_icl)
                 if result is not None:
                     self.data.append(result)
         self.enable_qa_tag = False
     
     @torch.no_grad()
-    def generate_task(self, generator: PreTrainedModel, full_context: str, context_sent: List[str], title: str, model_max_length: int, use_cot: bool=False, use_icl: bool=True):
+    def generate_task(self, generator: PreTrainedModel, tokenizer: PreTrainedTokenizer, full_context: str, context_sent: List[str], title: str, model_max_length: int, use_cot: bool=False, use_icl: bool=True):
         st_pos = randint(0, len(context_sent) - 16)
         context = ' '.join(context_sent[st_pos:st_pos+16])
         messages = [
@@ -213,19 +214,19 @@ class LooGLEDataset(ICLContextDataset):
                 'content': f"You are given a piece of text as the context. You should generate ONLY one question and the corresponding answer according to the context. You should also select one or more sentences directly from the original context as the evidence. The evidences must be verbatim sentences from the context. Please answer in the following format: \nQuestion: [question] \nAnswer: [answer] \nEvidence: [evidence]\nPlease DON'T output quotes when outputting evidences. The following is the piece of text: {context}"
             }
         ]
-        input_ids = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(generator.device)
+        input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(generator.device)
         mask_attention = torch.ones_like(input_ids)
-        terminators = [self.tokenizer.eos_token_id, self.tokenizer.convert_tokens_to_ids("<|eot_id|>")]
+        terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
         for _ in range(5):
             outputs = generator.generate(
                 input_ids=input_ids,
                 attention_mask=mask_attention.to(generator.device),
                 max_new_tokens=1024,
-                pad_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=tokenizer.eos_token_id,
                 eos_token_id=terminators,
                 do_sample=False,
             )
-            response = self.tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
+            response = tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
             question_position = response.find("Question:")
             answer_position = response.find("Answer:")
             evidence_position = response.find("Evidence:")
@@ -250,7 +251,7 @@ class LooGLEDataset(ICLContextDataset):
             else:
                 input_text = LOOGLEFORMAT.format(title=title, input=full_context, question=question)
 
-        print(f'syn input text: {input_text}')
+        # print(f'syn input text: {input_text}')
         example = input_text + ' ' + answer
         input_ids = self.tokenizer(example, add_special_tokens=False)['input_ids']
         input_length = len(self.tokenizer(input_text, add_special_tokens=False)['input_ids']) 
@@ -272,9 +273,10 @@ class LooGLEDataset(ICLContextDataset):
     
     
 def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_gated_memory: bool=False, use_cot: bool=False, use_icl: bool=True, **kwargs):
-    dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
     model = load_model(model_name_or_path=model_name_or_path, use_lora=use_lora, lora_rank=lora_rank, use_pissa=use_pissa, load_in_4bit=load_in_4bit, vocab_size=len(tokenizer), use_gated_memory=use_gated_memory)
-    model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
+    if use_lora or use_gated_memory:
+        dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
+        model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
     return model
 
 
@@ -302,7 +304,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
                 else:
                     input_text = LOOGLEFORMAT.format(title=title, input=context, question=qa_pair['Q'])
 
-            print(f'input_text: {input_text}')
+            # print(f'input_text: {input_text}')
             input_ids = tokenizer(input_text, add_special_tokens=False)['input_ids']
             if len(input_ids) > model_max_length:
                 input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
