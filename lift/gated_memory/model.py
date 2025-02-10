@@ -1,3 +1,4 @@
+import einops
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Union, List
@@ -41,7 +42,40 @@ class BiasSigmoid(nn.Module):
         self.mod = nn.Sigmoid()
 
     def forward(self, x):
-        return self.mod(3*(x - 1))
+        return self.mod(4*(x - 0.5494))
+
+
+class RNNGate(nn.Module):
+    def __init__(self, num_heads: int, head_dim: int, config: LlamaConfig):
+        self.rnn = nn.RNN(
+            input_size=head_dim,
+            hidden_size=head_dim,
+            num_layers=1,
+            batch_first=True
+        )
+        self.h0 = nn.Parameter(torch.randn(num_heads, 1, head_dim))
+        gatedim = int(head_dim ** 0.5)
+        self.gate_proj = nn.Sequential(
+            GroupedLinear(num_heads, head_dim * 2, gatedim, bias=config.attention_bias),
+            nn.SiLU(inplace=True),
+            GroupedLinear(num_heads, head_dim),
+            BiasSigmoid()
+        )
+    
+    def forward(self, keys: torch.Tensor, queries: torch.Tensor):
+        """
+        Args:
+            keys (torch.Tensor): Batched keys, shape: [Batch, Token, Head, Hidden Dim]
+            queries (torch.Tensor): Batched queries, shape: [Batch, Token, Head, Hidden Dim]
+        """
+        bsz = keys.shape[0]
+        keys = einops.rearrange(keys, "batch token head hidden -> (batch head) token hidden")
+        h0 = self.h0.repeat((bsz, 1, 1))
+        accumulated_keys, _ = self.rnn.forward(keys, h0)
+        accumulated_keys = einops.rearrange(accumulated_keys, "(batch head) token hidden -> batch token head hidden", batch=bsz)
+        proj_input = torch.concat((accumulated_keys, queries), dim=-1)
+        return self.gate_proj(proj_input)
+
 
 class GMLlamaAttention(LlamaAttention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -57,18 +91,13 @@ class GMLlamaAttention(LlamaAttention):
             GroupedLinear(self.num_heads, memdim, self.head_dim, bias=config.attention_bias),
             )
         gatedim = int(self.head_dim**0.5)
-        tmp = GroupedLinear(self.num_heads, gatedim, 1, bias=False)
-        '''
-        with torch.no_grad():
-            tmp.bias.fill_(0)
-            tmp.weight.fill_(0)
-        '''
-        self.gate_proj = nn.Sequential(
-            GroupedLinear(self.num_heads, self.head_dim, gatedim, bias=config.attention_bias),
-            nn.SiLU(inplace=True),
-            tmp,
-            BiasSigmoid()#nn.Sigmoid()
-            )
+        # self.gate_proj = nn.Sequential(
+        #     GroupedLinear(self.num_heads, self.head_dim, gatedim, bias=config.attention_bias),
+        #     nn.SiLU(inplace=True),
+        #     GroupedLinear(self.num_heads, gatedim, 1, bias=False),
+        #     BiasSigmoid()#nn.Sigmoid()
+        # )
+        self.gate_proj = RNNGate(self.num_heads, self.head_dim, config)
 
     def forward(
         self,
@@ -94,7 +123,7 @@ class GMLlamaAttention(LlamaAttention):
         value_states = value_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
 
         # !!! retrieval from mem is more of content rather than position, not input q is not added to PE
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states) 
+        mem, memgate = self.mem_proj(query_states), self.gate_proj(key_states, query_states)
 
         if position_embeddings is None:
             logger.warning_once(
