@@ -67,7 +67,6 @@ class MLPGate(nn.Module):
         post_sum = torch.log(torch.sum(torch.exp(attn_weights), dim=-1).unsqueeze(-1))
         memgate = self.gate_proj(queries)
         # print('!' * 10, torch.mean(post_sum), '\n')
-        memgate = memgate / (memgate + post_sum)
         return nn.functional.sigmoid(memgate - post_sum)
 
 
