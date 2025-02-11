@@ -61,10 +61,13 @@ class MLPGate(nn.Module):
     def forward(self, keys: torch.Tensor, queries: torch.Tensor, attention_mask: Optional[torch.Tensor]=None):
         keys = repeat_kv(keys, self.num_key_value_groups)
         attn_weights = torch.matmul(queries, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
-        if attention_mask is not None:
-            causal_mask = attention_mask[:, :, :, : keys.shape[-2]]
-            attn_weights = attn_weights + causal_mask
-        post_sum = torch.log(torch.sum(torch.exp(attn_weights), dim=-1).unsqueeze(-1))
+        assert attention_mask is None
+        causal_mask = torch.tril(torch.ones(*attn_weights.shape[-2:], dtype=torch.bool, device=attn_weights.device))[None, None, :, :]
+        # print('!' * 10, causal_mask, '\n\n')
+        causal_mask = causal_mask.expand(*attn_weights.shape)
+        attn_weights = attn_weights.masked_fill(~causal_mask, -torch.inf)
+        post_sum = torch.logsumexp(attn_weights, dim=-1).unsqueeze(-1)
+        # post_sum = torch.log(torch.sum(torch.exp(attn_weights), dim=-1).unsqueeze(-1))
         memgate = self.gate_proj(queries)
         # print('!' * 10, torch.mean(post_sum), '\n')
         return nn.functional.sigmoid(memgate - post_sum)
