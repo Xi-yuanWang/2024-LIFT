@@ -45,34 +45,63 @@ class BiasSigmoid(nn.Module):
         return self.mod(4*(x - 0.5494))
 
 
+class MLPGate(nn.Module):
+    def __init__(self, num_key_value_groups: int, num_heads: int, head_dim: int, config: LlamaConfig):
+        super().__init__()
+        self.num_key_value_groups = num_key_value_groups
+        self.head_dim = head_dim
+        gatedim = int(head_dim**0.5)
+        self.gate_proj = nn.Sequential(
+            GroupedLinear(num_heads, head_dim, gatedim, bias=config.attention_bias),
+            nn.SiLU(inplace=True),
+            GroupedLinear(num_heads, gatedim, 1, bias=False),
+            # BiasSigmoid()
+        )
+    
+    def forward(self, keys: torch.Tensor, queries: torch.Tensor, attention_mask: Optional[torch.Tensor]=None):
+        keys = repeat_kv(keys, self.num_key_value_groups)
+        attn_weights = torch.matmul(queries, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
+        if attention_mask is not None:
+            causal_mask = attention_mask[:, :, :, : keys.shape[-2]]
+            attn_weights = attn_weights + causal_mask
+        post_sum = torch.log(torch.sum(torch.exp(attn_weights), dim=-1).unsqueeze(-1))
+        memgate = self.gate_proj(queries)
+        # print('!' * 10, torch.mean(post_sum), '\n')
+        memgate = memgate / (memgate + post_sum)
+        return nn.functional.sigmoid(memgate - post_sum)
+
+
 class RNNGate(nn.Module):
-    def __init__(self, num_heads: int, head_dim: int, config: LlamaConfig):
+    def __init__(self, num_key_value_heads: int, num_heads: int, head_dim: int, config: LlamaConfig):
+        super().__init__()
         self.rnn = nn.RNN(
             input_size=head_dim,
             hidden_size=head_dim,
             num_layers=1,
             batch_first=True
         )
-        self.h0 = nn.Parameter(torch.randn(num_heads, 1, head_dim))
+        self.num_key_value_groups = num_heads // num_key_value_heads
+        self.h0 = nn.Parameter(torch.randn(1, num_key_value_heads, head_dim))
         gatedim = int(head_dim ** 0.5)
         self.gate_proj = nn.Sequential(
             GroupedLinear(num_heads, head_dim * 2, gatedim, bias=config.attention_bias),
             nn.SiLU(inplace=True),
-            GroupedLinear(num_heads, head_dim),
+            GroupedLinear(num_heads, gatedim, 1, bias=config.attention_bias),
             BiasSigmoid()
         )
     
     def forward(self, keys: torch.Tensor, queries: torch.Tensor):
         """
         Args:
-            keys (torch.Tensor): Batched keys, shape: [Batch, Token, Head, Hidden Dim]
-            queries (torch.Tensor): Batched queries, shape: [Batch, Token, Head, Hidden Dim]
+            keys (torch.Tensor): Batched keys, shape: [Batch, Head, Token, Hidden Dim]
+            queries (torch.Tensor): Batched queries, shape: [Batch, Head, Token, Hidden Dim]
         """
         bsz = keys.shape[0]
-        keys = einops.rearrange(keys, "batch token head hidden -> (batch head) token hidden")
-        h0 = self.h0.repeat((bsz, 1, 1))
+        keys = einops.rearrange(keys, "batch head token hidden -> (batch head) token hidden")
+        h0 = self.h0.repeat((1, bsz, 1))
         accumulated_keys, _ = self.rnn.forward(keys, h0)
-        accumulated_keys = einops.rearrange(accumulated_keys, "(batch head) token hidden -> batch token head hidden", batch=bsz)
+        accumulated_keys = einops.rearrange(accumulated_keys, "(batch head) token hidden -> batch head token hidden", batch=bsz)
+        accumulated_keys = repeat_kv(accumulated_keys, self.num_key_value_groups)
         proj_input = torch.concat((accumulated_keys, queries), dim=-1)
         return self.gate_proj(proj_input)
 
@@ -90,14 +119,7 @@ class GMLlamaAttention(LlamaAttention):
             nn.SiLU(inplace=True),
             GroupedLinear(self.num_heads, memdim, self.head_dim, bias=config.attention_bias),
             )
-        gatedim = int(self.head_dim**0.5)
-        # self.gate_proj = nn.Sequential(
-        #     GroupedLinear(self.num_heads, self.head_dim, gatedim, bias=config.attention_bias),
-        #     nn.SiLU(inplace=True),
-        #     GroupedLinear(self.num_heads, gatedim, 1, bias=False),
-        #     BiasSigmoid()#nn.Sigmoid()
-        # )
-        self.gate_proj = RNNGate(self.num_heads, self.head_dim, config)
+        self.gate_proj = MLPGate(self.num_key_value_groups, self.num_heads, self.head_dim, config)
 
     def forward(
         self,
@@ -123,7 +145,7 @@ class GMLlamaAttention(LlamaAttention):
         value_states = value_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
 
         # !!! retrieval from mem is more of content rather than position, not input q is not added to PE
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(key_states, query_states)
+        mem, memgate = self.mem_proj(query_states), self.gate_proj(key_states, query_states, attention_mask)
 
         if position_embeddings is None:
             logger.warning_once(
@@ -225,7 +247,7 @@ class GMLlamaFlashAttention2(GMLlamaAttention):
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
         # !!! retrieval from mem is more of content rather than position, not input q is not added to PE
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states) 
+        mem, memgate = self.mem_proj(query_states), self.gate_proj(key_states, query_states, attention_mask)
 
         if position_embeddings is None:
             logger.warning_once(
@@ -354,7 +376,7 @@ class GMLlamaSdpaAttention(GMLlamaAttention):
         value_states = value_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
 
         # !!! retrieval from mem is more of content rather than position, not input q is not added to PE
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states) 
+        mem, memgate = self.mem_proj(query_states), self.gate_proj(key_states, query_states, attention_mask)
 
         if position_embeddings is None:
             logger.warning_once(
