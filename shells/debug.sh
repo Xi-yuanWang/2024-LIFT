@@ -1,25 +1,44 @@
-python scripts/test_bamboo.py \
-    --input_file datasets/bamboo/reportsumsort_16k.jsonl \
-    --output_file pissa/debug.jsonl \
+#!/bin/bash
+#SBATCH -p IAI_SLURM_HGX
+#SBATCH -o logs/%j-LongBench-MLPGate-rICL-QA10-C3M5-gov_report.out.log
+#SBATCH -e logs/%j-LongBench-MLPGate-rICL-QA10-C3M5-gov_report.err.log
+#SBATCH --gres=gpu:4
+#SBATCH --qos=16gpu-hgx
+#SBATCH -J gov_report
+#SBATCH --nodes=1 
+#SBATCH --ntasks-per-node=1
+#SBATCH --time=24:00:00
+
+# python scripts/mp_wrapper_longbench.py \
+#     --script scripts/test_longbench_normal_syn_qa.py \
+#     --num_process 4 \
+#     --input_dir datasets/longbench_sampling \
+#     --output_file outputs/LongBench-MLPGate-rICL-QA10-C3M5-gov_report.jsonl \
+#     --subprocess_args \
+python scripts/test_longbench_normal_syn_qa.py \
+    --subtask_name gov_report \
+    --input_dir datasets/longbench_sampling \
+    --output_path outputs/debug.jsonl \
     --overwrite True \
-    --num_syn_qa 0 \
-    --model_name_or_path models/Llama-3-8B-Instruct-pissa-r128 \
-    --model_max_length 8000 \
+    --num_syn_qa 10 \
+    --generator_name_or_path models/Meta-Llama-3-8B-Instruct \
+    --use_icl True \
+    --model_name_or_path models/MLPGated-Memory-Llama-3-8B-Instruct \
+    --model_max_length 7800 \
     --block_size 256 \
-    --len_segment 2 \
-    --len_offset 1 \
-    --use_lora True \
-    --lora_rank 128 \
-    --use_pissa True \
+    --len_segment 8 \
+    --len_offset 3 \
+    --use_gated_memory True \
+    --load_in_4bit True \
     --gather_batches True \
-    --involve_qa_epochs 3 \
-    --num_train_epochs 2 \
-    --remove_unused_columns True \
+    --involve_qa_epochs 5 \
+    --num_train_epochs 3 \
+    --learning_rate 2e-4 \
+    --remove_unused_columns False \
     --report_to none \
     --output_dir models/temp \
     --overwrite_output_dir True \
     --per_device_train_batch_size 1 \
-    --learning_rate 1e-6 \
     --weight_decay 1e-4 \
     --adam_beta1 0.9 \
     --adam_beta2 0.98 \
@@ -32,6 +51,4 @@ python scripts/test_bamboo.py \
     --bf16 True \
     --tf32 False \
     --gradient_checkpointing True \
-
-
-
+    --lr_scheduler_type constant
