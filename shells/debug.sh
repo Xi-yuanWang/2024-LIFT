@@ -1,25 +1,26 @@
-python scripts/test_bamboo.py \
-    --input_file datasets/bamboo/reportsumsort_16k.jsonl \
-    --output_file pissa/debug.jsonl \
+python scripts/test_longbench_normal_syn_qa.py \
+    --input_dir datasets/longbench_tune \
+    --subtask_name gov_report \
+    --output_path outputs/debug.jsonl \
     --overwrite True \
     --num_syn_qa 0 \
-    --model_name_or_path models/Llama-3-8B-Instruct-pissa-r128 \
-    --model_max_length 8000 \
+    --model_name_or_path models/Meta-Llama-3-8B-Instruct \
+    --model_max_length 7800 \
     --block_size 256 \
-    --len_segment 2 \
-    --len_offset 1 \
-    --use_lora True \
-    --lora_rank 128 \
-    --use_pissa True \
+    --len_segment 8 \
+    --len_offset 3 \
+    --use_prefix_tuning True \
+    --num_virtual_tokens 20 \
+    --load_in_4bit True \
     --gather_batches True \
-    --involve_qa_epochs 3 \
-    --num_train_epochs 2 \
-    --remove_unused_columns True \
+    --involve_qa_epochs 0 \
+    --num_train_epochs 4 \
+    --learning_rate 1e-3 \
+    --remove_unused_columns False \
     --report_to none \
     --output_dir models/temp \
     --overwrite_output_dir True \
     --per_device_train_batch_size 1 \
-    --learning_rate 1e-6 \
     --weight_decay 1e-4 \
     --adam_beta1 0.9 \
     --adam_beta2 0.98 \
@@ -32,6 +33,4 @@ python scripts/test_bamboo.py \
     --bf16 True \
     --tf32 False \
     --gradient_checkpointing True \
-
-
-
+    --lr_scheduler_type constant

@@ -53,6 +53,8 @@ class CustomTrainingArguments:
     lora_rank: int = field(default=8)
     use_pissa: bool = field(default=False)
     use_gated_memory: bool = field(default=False, metadata={'help': "Use the gated-memory technique."})
+    use_prefix_tuning: bool = field(default=False, metadata={'help': "Use prefix-tuning."})
+    num_virtual_tokens: Optional[int] = field(default=None, metadata={'help': "The number of learnable tokens in prefix-tuning."})
     load_in_4bit: bool = field(default=False)
     load_in_8bit: bool = field(default=False)
     gather_batches: bool = field(default=False)
@@ -63,6 +65,8 @@ class CustomTrainingArguments:
         if self.use_pissa:
             assert self.use_lora, "LoRA must be enabled when using PiSSA."
         assert int(self.use_gated_memory) + int(self.use_lora) <= 1, "LoRA and the gated-memory technique cannot be used simultaneously."
+        if self.use_prefix_tuning and self.num_virtual_tokens is None:
+            raise ValueError("Use prefix-tuning but '--num_virtual_tokens' is not provided.")
 
 
 def parse_args(class_clusters: tuple[Any|tuple[Any]], no_dict: tuple[Any], return_config: bool=False):
