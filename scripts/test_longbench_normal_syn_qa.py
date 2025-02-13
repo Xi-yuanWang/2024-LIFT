@@ -280,7 +280,7 @@ def LongBenchtrain(context: str, tokenizer: PreTrainedTokenizer, model_name_or_p
         use_prefix_tuning=use_prefix_tuning,
         num_virtual_tokens=num_virtual_tokens
     )
-    if use_lora or use_gated_memory:
+    if use_lora or use_gated_memory or use_prefix_tuning:
         dataset = LongBenchDataset(context, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, generator_name_or_path, use_icl)
         model = train(
             model=model,

@@ -132,10 +132,13 @@ def load_model(model_name_or_path: str, use_lora: bool=False, lora_rank: Optiona
 
     elif use_prefix_tuning:
         model = load_base_model(model_name_or_path, load_in_4bit, load_in_8bit, vocab_size)
-        peft_config = PrefixTuningConfig(task_type='CAUSAL_LM', num_virtual_tokens=num_virtual_tokens)
+        peft_config = PrefixTuningConfig(
+            task_type=TaskType.CAUSAL_LM,
+            num_virtual_tokens=num_virtual_tokens,
+            inference_mode=False
+        )
         model = get_peft_model(model, peft_config)
         print(model)
-        print(model.print_trainable_parameters())
 
     else:
         model = load_base_model(model_name_or_path, load_in_4bit, load_in_8bit, vocab_size)
