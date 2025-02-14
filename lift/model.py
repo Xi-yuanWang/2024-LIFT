@@ -1,11 +1,11 @@
 from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
-    PreTrainedTokenizer,
     AutoModelForCausalLM,
 )
 from peft import (
     LoraConfig,
+    PrefixTuningConfig,
     TaskType,
     get_peft_model,
     PeftModel,
@@ -25,46 +25,7 @@ def load_tokenizer(tokenizer_name_or_path: str):
     return tokenizer
 
 
-def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8bit: bool=False, vocab_size: Optional[int]=None, use_gated_memory: bool=False):
-    """Load the base model.
-    Args:
-        model_name_or_path (str):
-        load_in_4bit (bool): OPTIONAL, default to `False`.
-        load_in_8bit (bool): OPTIONAL, default to `False`.
-        vocab_size (int): OPTIONAL, default to `None`. If it's assigned a non-None value, the model will adapt to the vocabulary size.
-    Returns:
-        model (PreTrainedModel): the base model.
-    """
-    if use_gated_memory:  # use_gated_memory should be checked first
-        if load_in_4bit:
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=torch.bfloat16,
-            )
-            model = GMLlamaForCausalLM.from_pretrained(
-                model_name_or_path,
-                trust_remote_code=True,
-                device_map="auto",
-                torch_dtype=torch.bfloat16,
-                quantization_config=quantization_config
-            )
-        elif load_in_8bit:
-            raise NotImplementedError
-        else:
-            model = GMLlamaForCausalLM.from_pretrained(
-                model_name_or_path,
-                trust_remote_code=True,
-                device_map="auto",
-                torch_dtype=torch.bfloat16,
-            )
-        for param in model.parameters():
-            param.requires_grad_(False)
-        model = PeftModel.from_pretrained(model, model_name_or_path, is_trainable=True)
-        print(model)
-        return model
-    
+def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8bit: bool=False, vocab_size: Optional[int]=None):
     # We assume `peft` is available...
     from transformers.utils import find_adapter_config_file
     maybe_adapter_path = find_adapter_config_file(model_name_or_path)
@@ -107,25 +68,56 @@ def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8
     return model_base
 
 
-def load_model(model_name_or_path: str, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, load_in_8bit: bool=False, vocab_size: Optional[int]=None, use_gated_memory: bool=False):
+def load_model(model_name_or_path: str, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, load_in_8bit: bool=False, vocab_size: Optional[int]=None, use_gated_memory: bool=False, use_prefix_tuning: bool=False, num_virtual_tokens: Optional[int]=None):
     """Load the trainable model.
     Args:
-        model_name_or_path (str):
+        model_name_or_path (str): The name or path to the pretrained model checkpoint.
         tokenizer (PreTrainedTokenizer): the model input will adapt to the width of the tokenizer.
         use_lora (bool): OPTIONAL, default to `False`; whether to use LoRA.
         lora_rank (int): OPTIONAL, default to `None`; assign it when `use_lora=True`.
-        load_in_4bit (bool): OPTIONAL, default to `False`; it must be used with `use_lora=True`.
-        load_in_8bit (bool): OPTIONAL, default to `False`; it must be used with `use_lora=True`.
+        use_pissa (bool): OPTIONAL, default to `False`; whether to use PiSSA intialization for LoRA.
+        load_in_4bit (bool): OPTIONAL, default to `False`.
+        load_in_8bit (bool): OPTIONAL, default to `False`.
         vocab_size (int): OPTIONAL, default to `None`. If it's assigned a non-None value, the model will adapt to the vocabulary size.
+        use_gated_memory (bool): OPTIONAL, default to `None`. Whether to use the gated-memory adapter.
+        use_prefix_tuning (bool): OPTIONAL, default to `False`. Whether to use prefix-tuning.
+        num_virtual_tokens (int): OPTIONAL, default to `None`. The number of learnable tokens in prefix-tuning.
     Returns:
         model (PreTrainedModel): the model to train.
     """
-    model_base = load_base_model(model_name_or_path, load_in_4bit, load_in_8bit, vocab_size, use_gated_memory)
-    # Load the model
-    if use_lora:
-        # Init LoRA model
+    if use_gated_memory:
+        if load_in_4bit:
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+            )
+            model = GMLlamaForCausalLM.from_pretrained(
+                model_name_or_path,
+                trust_remote_code=True,
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+                quantization_config=quantization_config
+            )
+        elif load_in_8bit:
+            raise NotImplementedError
+        else:
+            model = GMLlamaForCausalLM.from_pretrained(
+                model_name_or_path,
+                trust_remote_code=True,
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+            )
+        for param in model.parameters():
+            param.requires_grad_(False)
+        model = PeftModel.from_pretrained(model, model_name_or_path, is_trainable=True)
+        model.print_trainable_parameters()
+
+    elif use_lora:
+        model = load_base_model(model_name_or_path, load_in_4bit, load_in_8bit, vocab_size)
         if use_pissa:
-            model = PeftModel.from_pretrained(model_base, model_name_or_path, subfolder="pissa_init", is_trainable=True)
+            model = PeftModel.from_pretrained(model, model_name_or_path, subfolder="pissa_init", is_trainable=True)
         else:
             peft_config = LoraConfig(
                 task_type=TaskType.CAUSAL_LM,
@@ -136,8 +128,21 @@ def load_model(model_name_or_path: str, use_lora: bool=False, lora_rank: Optiona
                 lora_dropout=.0,
                 init_lora_weights='gaussian',
             )
-            model = get_peft_model(model_base, peft_config)
+            model = get_peft_model(model, peft_config)
+        model.print_trainable_parameters()
+
+    elif use_prefix_tuning:
+        model = load_base_model(model_name_or_path, load_in_4bit, load_in_8bit, vocab_size)
+        peft_config = PrefixTuningConfig(
+            task_type=TaskType.CAUSAL_LM,
+            num_virtual_tokens=num_virtual_tokens,
+            inference_mode=False
+        )
+        model = get_peft_model(model, peft_config)
+        model.print_trainable_parameters()
+
     else:
-        model = model_base
+        model = load_base_model(model_name_or_path, load_in_4bit, load_in_8bit, vocab_size)
+
     torch.cuda.empty_cache()  # Manually release memory
     return model
