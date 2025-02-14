@@ -112,7 +112,7 @@ def load_model(model_name_or_path: str, use_lora: bool=False, lora_rank: Optiona
         for param in model.parameters():
             param.requires_grad_(False)
         model = PeftModel.from_pretrained(model, model_name_or_path, is_trainable=True)
-        return model
+        model.print_trainable_parameters()
 
     elif use_lora:
         model = load_base_model(model_name_or_path, load_in_4bit, load_in_8bit, vocab_size)
@@ -129,6 +129,7 @@ def load_model(model_name_or_path: str, use_lora: bool=False, lora_rank: Optiona
                 init_lora_weights='gaussian',
             )
             model = get_peft_model(model, peft_config)
+        model.print_trainable_parameters()
 
     elif use_prefix_tuning:
         model = load_base_model(model_name_or_path, load_in_4bit, load_in_8bit, vocab_size)
@@ -138,7 +139,7 @@ def load_model(model_name_or_path: str, use_lora: bool=False, lora_rank: Optiona
             inference_mode=False
         )
         model = get_peft_model(model, peft_config)
-        print(model)
+        model.print_trainable_parameters()
 
     else:
         model = load_base_model(model_name_or_path, load_in_4bit, load_in_8bit, vocab_size)

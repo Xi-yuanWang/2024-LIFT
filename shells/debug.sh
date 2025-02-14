@@ -10,12 +10,12 @@ python scripts/test_longbench_normal_syn_qa.py \
     --len_segment 8 \
     --len_offset 3 \
     --use_prefix_tuning True \
-    --num_virtual_tokens 20 \
+    --num_virtual_tokens 100 \
     --load_in_4bit True \
     --gather_batches True \
     --involve_qa_epochs 0 \
-    --num_train_epochs 4 \
-    --learning_rate 1e-3 \
+    --num_train_epochs 20 \
+    --learning_rate 0.01 \
     --remove_unused_columns False \
     --report_to none \
     --output_dir models/temp \
@@ -32,5 +32,7 @@ python scripts/test_longbench_normal_syn_qa.py \
     --save_strategy no \
     --bf16 True \
     --tf32 False \
-    --gradient_checkpointing True \
-    --lr_scheduler_type constant
+    --gradient_checkpointing False \
+    --lr_scheduler_type cosine_with_min_lr \
+    --lr_scheduler_kwargs "{\"min_lr\": 1e-4}"
+    # --lr_scheduler_type constant
