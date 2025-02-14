@@ -17,7 +17,7 @@ def preprocess(model_name_or_path: str, output_dir: str):
         target_modules=["lm_head"],
         task_type=TaskType.CAUSAL_LM,
         lora_alpha=4,
-        modules_to_save=[f"layers.{i}.self_attn.mem_proj" for i in range(len(model.model.layers))]+[f"layers.{i}.self_attn.gate_proj" for i in range(len(model.model.layers))],
+        modules_to_save=[f"layers.{i}.self_attn.context_value_proj" for i in range(len(model.model.layers))]+[f"layers.{i}.self_attn.context_key_proj" for i in range(len(model.model.layers))],
     )
     model = get_peft_model(model, lora_config)
     model.save_pretrained(output_dir)

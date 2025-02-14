@@ -35,85 +35,6 @@ class GroupedLinear(nn.Module):
             x = x @ self.weight + self.bias.unsqueeze(1)
         return x
 
-class BiasSigmoid(nn.Module):
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.mod = nn.Sigmoid()
-
-    def forward(self, x):
-        return self.mod(4*(x - 0.5494))
-
-
-db_counter = 0
-
-
-class MLPGate(nn.Module):
-    def __init__(self, num_key_value_groups: int, num_heads: int, head_dim: int, config: LlamaConfig):
-        super().__init__()
-        self.num_key_value_groups = num_key_value_groups
-        self.head_dim = head_dim
-        gatedim = int(head_dim**0.5)
-        self.gate_proj = nn.Sequential(
-            GroupedLinear(num_heads, head_dim, gatedim, bias=config.attention_bias),
-            nn.SiLU(inplace=True),
-            GroupedLinear(num_heads, gatedim, 1, bias=False),
-            # BiasSigmoid()
-        )
-    
-    def forward(self, keys: torch.Tensor, queries: torch.Tensor, attention_mask: Optional[torch.Tensor]=None):
-        keys = repeat_kv(keys, self.num_key_value_groups)
-        attn_weights = torch.matmul(queries, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
-        assert attention_mask is None
-        qlen, klen = attn_weights.shape[-2:]
-        causal_mask = torch.tril(torch.ones((qlen, klen), dtype=torch.bool, device=attn_weights.device), diagonal=klen-qlen)[None, None, :, :]
-        causal_mask = causal_mask.expand(*attn_weights.shape)
-        attn_weights = attn_weights.masked_fill(~causal_mask, -torch.inf)
-        post_sum = torch.logsumexp(attn_weights, dim=-1).unsqueeze(-1)
-        memgate = 10 * self.gate_proj(queries)
-        global db_counter
-        if db_counter != -1:
-            db_counter += 1
-            # torch.save(post_sum, f'debug/post_sum_{db_counter}.torch')
-            # torch.save(memgate, f'debug/memgate_{db_counter}.torch')
-            # torch.save(nn.functional.sigmoid(memgate - post_sum - 3), f'debug/output_{db_counter}.torch')
-        return nn.functional.sigmoid(memgate - post_sum - 3)
-
-
-class RNNGate(nn.Module):
-    def __init__(self, num_key_value_heads: int, num_heads: int, head_dim: int, config: LlamaConfig):
-        super().__init__()
-        self.rnn = nn.RNN(
-            input_size=head_dim,
-            hidden_size=head_dim,
-            num_layers=1,
-            batch_first=True
-        )
-        self.num_key_value_groups = num_heads // num_key_value_heads
-        self.h0 = nn.Parameter(torch.randn(1, num_key_value_heads, head_dim))
-        gatedim = int(head_dim ** 0.5)
-        self.gate_proj = nn.Sequential(
-            GroupedLinear(num_heads, head_dim * 2, gatedim, bias=config.attention_bias),
-            nn.SiLU(inplace=True),
-            GroupedLinear(num_heads, gatedim, 1, bias=config.attention_bias),
-            BiasSigmoid()
-        )
-    
-    def forward(self, keys: torch.Tensor, queries: torch.Tensor):
-        """
-        Args:
-            keys (torch.Tensor): Batched keys, shape: [Batch, Head, Token, Hidden Dim]
-            queries (torch.Tensor): Batched queries, shape: [Batch, Head, Token, Hidden Dim]
-        """
-        bsz = keys.shape[0]
-        keys = einops.rearrange(keys, "batch head token hidden -> (batch head) token hidden")
-        h0 = self.h0.repeat((1, bsz, 1))
-        accumulated_keys, _ = self.rnn.forward(keys, h0)
-        accumulated_keys = einops.rearrange(accumulated_keys, "(batch head) token hidden -> batch head token hidden", batch=bsz)
-        accumulated_keys = repeat_kv(accumulated_keys, self.num_key_value_groups)
-        proj_input = torch.concat((accumulated_keys, queries), dim=-1)
-        return self.gate_proj(proj_input)
-
 
 class GMLlamaAttention(LlamaAttention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -122,13 +43,18 @@ class GMLlamaAttention(LlamaAttention):
         super().__init__(config, layer_idx)
         # assert config.num_attention_heads == config.num_key_value_heads, "not implemented for tensor parallel"
         assert self.is_causal, "implemented only for casual LLM"
-        memdim = 2 * self.head_dim
-        self.mem_proj = nn.Sequential(
-            GroupedLinear(self.num_heads, self.head_dim, memdim, bias=config.attention_bias),
+        hidden_dim = 2 * self.head_dim
+        self.context_value_proj = nn.Sequential(
+            GroupedLinear(self.num_heads, self.head_dim, hidden_dim, bias=config.attention_bias),
             nn.SiLU(inplace=True),
-            GroupedLinear(self.num_heads, memdim, self.head_dim, bias=config.attention_bias),
-            )
-        self.gate_proj = MLPGate(self.num_key_value_groups, self.num_heads, self.head_dim, config)
+            GroupedLinear(self.num_heads, hidden_dim, self.head_dim, bias=config.attention_bias),
+        )
+        self.context_key_proj = nn.Sequential(
+            GroupedLinear(self.num_heads, self.head_dim, hidden_dim, bias=config.attention_bias),
+            nn.SiLU(inplace=True),
+            GroupedLinear(self.num_heads, hidden_dim, self.head_dim, bias=config.attention_bias),
+            nn.LayerNorm((self.head_dim,))  # Allow it to learn the scale
+        )
 
     def forward(
         self,
@@ -164,30 +90,40 @@ class GMLlamaAttention(LlamaAttention):
         else:
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        
+        # Compute the contextualized key and value states after applying RoPE
+        context_key_states = self.context_key_proj(query_states)
+        context_value_states = self.context_value_proj(query_states)
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        # !!! retrieval from mem is more of content rather than position, not input q is not added to PE
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(key_states, query_states, attention_mask)
-        
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
+        kv_len = key_states.shape[2]
+        # Prepend the contextualized key and value states after GQA operations
+        key_states = torch.concat((context_key_states, key_states), dim=2)
+        value_states = torch.concat((context_value_states, value_states), dim=2)
+
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
         if attention_mask is not None:  # no matter the length, we just slice it
+            print("!" * 1000)
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
             attn_weights = attn_weights + causal_mask
+        else:
+            causal_mask = torch.tril(torch.ones((q_len, kv_len), dtype=torch.bool, device=key_states.device), diagonal=kv_len - q_len)
+            context_mask = torch.eye(q_len, dtype=torch.bool, device=causal_mask.device)
+            causal_mask = torch.concat((context_mask, causal_mask), dim=1)
+            causal_mask = causal_mask[None, None, :, :].expand((bsz, self.num_heads, -1, -1))
+            attn_weights = torch.masked_fill(attn_weights, ~causal_mask, -torch.inf)
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         attn_output = torch.matmul(attn_weights, value_states)
-
-        # !!! merge result with mem and gate
-        attn_output = (1-memgate) * attn_output + memgate * mem
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
@@ -204,7 +140,7 @@ class GMLlamaAttention(LlamaAttention):
         if not output_attentions:
             attn_weights = None
 
-        return attn_output, attn_weights, past_key_value, memgate
+        return attn_output, attn_weights, past_key_value
 
 
 class GMLlamaFlashAttention2(GMLlamaAttention):
@@ -217,6 +153,7 @@ class GMLlamaFlashAttention2(GMLlamaAttention):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        raise NotImplementedError("Gated momory doesn't support FlashAttention!")
         # TODO: Should be removed once Flash Attention for RoCm is bumped to 2.1.
         # flash_attn<2.1 generates top-left aligned causal mask, while what is needed here is bottom-right alignement, that was made default for flash_attn>=2.1. This attribute is used to handle this difference. Reference: https://github.com/Dao-AILab/flash-attention/releases/tag/v2.1.0.
         # Beware that with flash_attn<2.1, using q_seqlen != k_seqlen (except for the case q_seqlen == 1) produces a wrong mask (top-left).
@@ -267,14 +204,20 @@ class GMLlamaFlashAttention2(GMLlamaAttention):
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
+        # Compute the contextualized key and value states after applying RoPE
+        context_key_states = self.context_key_proj(query_states)
+        context_value_states = self.context_value_proj(query_states)
+
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        # !!! retrieval from mem is more of content rather than position, not input q is not added to PE
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(key_states, query_states, attention_mask)
-        
+        # Prepend the contextualized key and value states after applying KV-cache (or something else)
+        # NOTE: It may be problematic here but we don't use FlashAttention2
+        key_states = torch.concat((context_key_states, key_states), dim=2)
+        value_states = torch.concat((context_value_states, value_states), dim=2)
+
         # TODO: These transpose are quite inefficient but Flash Attention requires the layout [batch_size, sequence_length, num_heads, head_dim]. We would need to refactor the KV cache
         # to be able to avoid many of these transpose/reshape/view.
         query_states = query_states.transpose(1, 2)
@@ -323,16 +266,13 @@ class GMLlamaFlashAttention2(GMLlamaAttention):
             **kwargs,
         )
 
-        # !!! merge result with mem and gate
-        attn_output = (1-memgate) * attn_output + memgate * mem
-
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
         attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
             attn_weights = None
 
-        return attn_output, attn_weights, past_key_value, memgate
+        return attn_output, attn_weights, past_key_value
 
 
 class GMLlamaSdpaAttention(GMLlamaAttention):
@@ -396,20 +336,36 @@ class GMLlamaSdpaAttention(GMLlamaAttention):
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
+        # Compute the contextualized key and value states after applying RoPE
+        context_key_states = self.context_key_proj(query_states)
+        context_value_states = self.context_value_proj(query_states)
+
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
-        # !!! retrieval from mem is more of content rather than position, not input q is not added to PE
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(key_states, query_states, attention_mask)
+        kv_len = key_states.shape[2]
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
+        # Prepend the contextualized key and value states after GQA operations
+        key_states = torch.concat((context_key_states, key_states), dim=2)
+        value_states = torch.concat((context_value_states, value_states), dim=2)
 
         causal_mask = attention_mask
         if attention_mask is not None:
-            causal_mask = causal_mask[:, :, :, : key_states.shape[-2]]
+            print("!" * 1000)
+            causal_mask = causal_mask[:, :, :, : key_states.shape[-2]]  # NOTE: [batch, head, query, key]?
+            if attention_mask.dtype != torch.bool:
+                raise ValueError("Gated memory only supports boolean attention_mask.")
+            context_mask = torch.eye(q_len, dtype=torch.bool, device=causal_mask.device)
+            context_mask = context_mask[None, None, :, :].expand((bsz, self.num_heads, -1, -1))
+            causal_mask = torch.concat((context_mask, causal_mask), dim=2)
+        else:  # Materialize the causal mask even if it's a common causal mask
+            causal_mask = torch.tril(torch.ones((q_len, kv_len), dtype=torch.bool, device=key_states.device), diagonal=kv_len - q_len)
+            context_mask = torch.eye(q_len, dtype=torch.bool, device=causal_mask.device)
+            causal_mask = torch.concat((context_mask, causal_mask), dim=1)
+            causal_mask = causal_mask[None, None, :, :].expand((bsz, self.num_heads, -1, -1))
 
         # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
         # Reference: https://github.com/pytorch/pytorch/issues/112577.
@@ -418,28 +374,20 @@ class GMLlamaSdpaAttention(GMLlamaAttention):
             key_states = key_states.contiguous()
             value_states = value_states.contiguous()
 
-        # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
-        # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
-        is_causal = True if causal_mask is None and q_len > 1 else False
-
         attn_output = torch.nn.functional.scaled_dot_product_attention(
             query_states,
             key_states,
             value_states,
             attn_mask=causal_mask,
             dropout_p=self.attention_dropout if self.training else 0.0,
-            is_causal=is_causal,
         )
-
-        # !!! merge result with mem and gate
-        attn_output = (1-memgate) * attn_output + memgate * mem
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, -1)
 
         attn_output = self.o_proj(attn_output)
 
-        return attn_output, None, past_key_value, memgate
+        return attn_output, None, past_key_value
 
 
 GMLLAMA_ATTENTION_CLASSES = {
@@ -493,7 +441,7 @@ class GMLlamaDecoderLayer(LlamaDecoderLayer):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, self_attn_weights, present_key_value, memgate = self.self_attn(
+        hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -519,8 +467,6 @@ class GMLlamaDecoderLayer(LlamaDecoderLayer):
 
         if use_cache:
             outputs += (present_key_value,)
-
-        outputs += (memgate, )
 
         return outputs
 
@@ -606,7 +552,6 @@ class GMLlamaModel(LlamaModel):
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
-        all_memgates = ()
         next_decoder_cache = None
 
         for decoder_layer in self.layers[: self.config.num_hidden_layers]:
@@ -645,8 +590,6 @@ class GMLlamaModel(LlamaModel):
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
-            
-            all_memgates += (layer_outputs[-1],)
 
         hidden_states = self.norm(hidden_states)
 
@@ -659,12 +602,12 @@ class GMLlamaModel(LlamaModel):
             next_cache = next_cache.to_legacy_cache()
 
         if not return_dict:
-            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None) + (all_memgates, )
+            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=next_cache,
             hidden_states=all_hidden_states,
-            attentions=(all_self_attns, all_memgates),
+            attentions=all_self_attns,
         )
 
 
@@ -767,19 +710,12 @@ class GMLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         )
 
         hidden_states = outputs[0]
-        memgates = outputs[-1][1]
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
 
         loss = None
         if labels is not None:
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
-            # Shifting strategy follows transformers.loss.loss_utils.py
-            # memgates = torch.stack(memgates, dim=1)[..., 0]  # [Batch, Layer, Head, Token]
-            # shifted_mask = (labels != -100)[:, None, :].expand(memgates.shape)
-            # shifted_mask = shifted_mask[..., 1:]
-            # shifted_memgates = memgates[..., :-1]
-            # loss += torch.mean(shifted_memgates.masked_fill(shifted_mask, 0))
 
         if not return_dict:
             output = (logits,) + outputs[1:]

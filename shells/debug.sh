@@ -9,21 +9,15 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --time=24:00:00
 
-# python scripts/mp_wrapper_longbench.py \
-#     --script scripts/test_longbench_normal_syn_qa.py \
-#     --num_process 4 \
-#     --input_dir datasets/longbench_sampling \
-#     --output_file outputs/LongBench-MLPGate-rICL-QA10-C3M5-gov_report.jsonl \
-#     --subprocess_args \
 python scripts/test_longbench_normal_syn_qa.py \
     --subtask_name gov_report \
     --input_dir datasets/longbench_sampling \
     --output_path outputs/debug.jsonl \
     --overwrite True \
-    --num_syn_qa 10 \
+    --num_syn_qa 0 \
     --generator_name_or_path models/Meta-Llama-3-8B-Instruct \
     --use_icl True \
-    --model_name_or_path models/MLPGated-Memory-Llama-3-8B-Instruct \
+    --model_name_or_path models/MLPGate-Llama-3-8B-Instruct \
     --model_max_length 7800 \
     --block_size 256 \
     --len_segment 8 \
@@ -31,9 +25,9 @@ python scripts/test_longbench_normal_syn_qa.py \
     --use_gated_memory True \
     --load_in_4bit True \
     --gather_batches True \
-    --involve_qa_epochs 5 \
-    --num_train_epochs 3 \
-    --learning_rate 2e-4 \
+    --involve_qa_epochs 0 \
+    --num_train_epochs 4 \
+    --learning_rate 2e-5 \
     --remove_unused_columns False \
     --report_to none \
     --output_dir models/temp \
