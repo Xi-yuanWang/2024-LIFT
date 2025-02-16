@@ -189,7 +189,6 @@ class LooGLEDataset(ICLContextDataset):
                     bnb_4bit_compute_dtype=torch.bfloat16,
                     bnb_4bit_use_double_quant=True,
                     bnb_4bit_quant_type='nf4',
-                    do_sample=False,
                 ),
             )
             gen_tokenizer = load_tokenizer(generator_name_or_path)
@@ -224,7 +223,7 @@ class LooGLEDataset(ICLContextDataset):
                 max_new_tokens=1024,
                 pad_token_id=tokenizer.eos_token_id,
                 eos_token_id=terminators,
-                do_sample=False,
+                do_sample=True,
             )
             response = tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
             question_position = response.find("Question:")
