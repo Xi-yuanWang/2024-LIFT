@@ -283,10 +283,18 @@ def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_
         use_prefix_tuning=use_prefix_tuning,
         num_virtual_tokens=num_virtual_tokens
     )
+    dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
     if use_lora or use_gated_memory or use_prefix_tuning:
-        dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
         model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
-    return model
+    losses = []
+    with torch.no_grad():
+        for sample in dataset:
+            input_ids = sample['input_ids'].cuda().unsqueeze(0)
+            attention_mask = sample['attention_mask'].cuda().unsqueeze(0)
+            labels = sample['labels'].cuda().unsqueeze(0)
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+            losses.append(outputs['loss'].cpu().item())
+    return model, sum(losses) / len(losses)
 
 
 def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Dict, output_file: str, num_resumed: int=0, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_cot: bool=False, use_icl: bool=True):
@@ -301,7 +309,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
         title = sample['title']
         # qa_pairs = sample['test_qa_pairs']
         qa_pairs = eval(sample['qa_pairs'])
-        model = LooGLEtrain(context, title, tokenizer, training_args=training_args, num_syn_qa=num_syn_qa, title_option=title_option, generator_name_or_path=generator_name_or_path, use_cot=use_cot, use_icl=use_icl, **lift_args)
+        model, loss = LooGLEtrain(context, title, tokenizer, training_args=training_args, num_syn_qa=num_syn_qa, title_option=title_option, generator_name_or_path=generator_name_or_path, use_cot=use_cot, use_icl=use_icl, **lift_args)
         model.eval()
         for qa_pair in tqdm.tqdm(qa_pairs, desc="QA Pair"):
 
@@ -334,7 +342,8 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
         output_case = {
             'title': title,
             'input': context,
-            'qa_pairs': qa_pairs
+            'qa_pairs': qa_pairs,
+            'loss': loss
         }
         with open(output_file, 'a') as f:
             f.write(json.dumps(output_case) + '\n')
