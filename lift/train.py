@@ -71,6 +71,7 @@ def train(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrained
         dataset.enable_qa()
         training_args_syn = deepcopy(training_args)
         training_args_syn.num_train_epochs = involve_qa_epochs
+        training_args_syn.lr_scheduler_type = "constant"
         trainer_syn, model = load_trainer(
             model=model,
             training_dataset=dataset,
