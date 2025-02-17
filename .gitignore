@@ -10,3 +10,8 @@ test.csv
 api_key.txt
 data/
 mp/
+shells/ablation
+shells/extra
+shells/mys
+shells/tune
+models/
