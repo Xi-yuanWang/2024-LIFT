@@ -64,8 +64,10 @@ class ICLContextDataset(Dataset):
             for i in range(1, 31):
                 segment_sts.append(context.find(f'Paragraph {i}:'))
             segment_sts.append(len(context))
-            self.data.extend([context[l:r] for l, r in zip(segment_sts[:-1], segment_sts[1:])])
-            print(self.data)
+            for l, r in zip(segment_sts[:-1], segment_sts[1:]):
+                text = context[l:r]
+                input_ids = self.tokenizer(text, add_special_tokens=False)['input_ids']
+                self.data.append((input_ids, 0))
         else:
             for s in range(0, len(input_ids), len_offset):
                 start_pos = s
@@ -174,7 +176,7 @@ class TestArguments:
 
 class LongBenchDataset(ICLContextDataset):
     def __init__(self, context: str, tokenizer: PreTrainedTokenizer, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, num_syn_qa: int=0, generator_name_or_path: str=None, use_icl: bool=True, subtask_name: str=''):
-        super().__init__(context, tokenizer, model_max_length, block_size, len_segment, len_offset)
+        super().__init__(context, tokenizer, model_max_length, block_size, len_segment, len_offset, subtask_name)
         # Generate QA pairs
         if num_syn_qa > 0:
             context_sent = sent_tokenize(context)
