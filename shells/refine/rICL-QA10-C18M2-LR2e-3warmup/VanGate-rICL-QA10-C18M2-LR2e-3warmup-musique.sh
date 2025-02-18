@@ -9,9 +9,12 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --time=24:00:00
 
-python scripts/test_longbench_for_musique.py \
+python scripts/mp_wrapper_longbench.py \
+    --script scripts/test_longbench_normal_syn_qa.py \
+    --num_process 4 \
     --input_dir datasets/longbench_sampling \
-    --output_path outputs/debug.jsonl \
+    --output_file outputs/VanGate/rICL-QA10-C18M2-LR2e-3warmup-musique.jsonl \
+    --subprocess_args \
     --subtask_name musique \
     --overwrite True \
     --num_syn_qa 10 \
@@ -26,7 +29,7 @@ python scripts/test_longbench_for_musique.py \
     --load_in_4bit True \
     --gather_batches True \
     --involve_qa_epochs 2 \
-    --num_train_epochs 10 \
+    --num_train_epochs 18 \
     --learning_rate 2e-3 \
     --remove_unused_columns False \
     --report_to none \

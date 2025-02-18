@@ -1,20 +1,23 @@
 #!/bin/bash
 #SBATCH -p IAI_SLURM_HGX
-#SBATCH -o logs/%j-VanGate-rICL-QA10-C18M2-LR2e-3warmup-musique.out.log
-#SBATCH -e logs/%j-VanGate-rICL-QA10-C18M2-LR2e-3warmup-musique.err.log
+#SBATCH -o logs/%j-VanGate-musique-QA30-C4M4-LR2e-3warmup-musique.out.log
+#SBATCH -e logs/%j-VanGate-musique-QA30-C4M4-LR2e-3warmup-musique.err.log
 #SBATCH --gres=gpu:4
 #SBATCH --qos=16gpu-hgx
-#SBATCH -J Q10C18M2m
+#SBATCH -J Q30C4M4
 #SBATCH --nodes=1 
 #SBATCH --ntasks-per-node=1
 #SBATCH --time=24:00:00
 
-python scripts/test_longbench_for_musique.py \
+python scripts/mp_wrapper_longbench.py \
+    --script scripts/test_longbench_for_musique.py \
+    --num_process 4 \
     --input_dir datasets/longbench_sampling \
-    --output_path outputs/debug.jsonl \
+    --output_file outputs/VanGate/musique-QA30-C4M4-LR2e-3warmup-musique.jsonl \
+    --subprocess_args \
     --subtask_name musique \
     --overwrite True \
-    --num_syn_qa 10 \
+    --num_syn_qa 30 \
     --generator_name_or_path models/Meta-Llama-3-8B-Instruct \
     --use_icl True \
     --model_name_or_path models/Gated-Memory-Llama-3-8B-Instruct \
@@ -25,8 +28,8 @@ python scripts/test_longbench_for_musique.py \
     --use_gated_memory True \
     --load_in_4bit True \
     --gather_batches True \
-    --involve_qa_epochs 2 \
-    --num_train_epochs 10 \
+    --involve_qa_epochs 4 \
+    --num_train_epochs 4 \
     --learning_rate 2e-3 \
     --remove_unused_columns False \
     --report_to none \
