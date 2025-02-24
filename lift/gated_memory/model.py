@@ -5,7 +5,7 @@ from transformers.models.llama.modeling_llama import LlamaConfig, logger, apply_
 
 
 class GroupedLinear(nn.Module):
-    def __init__(self, group_size: int, indim: int, outdim: int, bias: bool=True) -> None:
+    def __init__(self, num_repeat: int, group_size: int, indim: int, outdim: int, bias: bool=True) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.empty((group_size, indim, outdim)))
         if bias:
@@ -13,6 +13,8 @@ class GroupedLinear(nn.Module):
         else:
             self.register_parameter('bias', None)
         self.reset_parameters()
+        self.num_repeat = num_repeat
+        self.group_size = group_size
 
     def reset_parameters(self) -> None:
         # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
@@ -26,12 +28,14 @@ class GroupedLinear(nn.Module):
         
     def forward(self, x: torch.Tensor):
         '''
-        x: (bsz, #group_size, q_len, #in_dim)
+        x: (bsz, #group_size*#repeat, q_len, #in_dim)
         '''
+        x = x.unflatten(1, (self.group_size, self.num_repeat))
         if self.bias is None:
-            x = x @ self.weight
+            x = x @ self.weight.unsqueeze(1)
         else:
-            x = x @ self.weight + self.bias.unsqueeze(1)
+            x = x @ self.weight.unsqueeze(1) + self.bias.unsqueeze(1).unsqueeze(1)
+        x = x.flatten(1, 2)
         return x
 
 class BiasSigmoid(nn.Module):
@@ -42,6 +46,14 @@ class BiasSigmoid(nn.Module):
 
     def forward(self, x):
         return self.mod(3*(x - 1))
+    
+class BiasScale(nn.Module):
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, x):
+        return 0.2 * x
 
 class GMLlamaAttention(LlamaAttention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -52,22 +64,19 @@ class GMLlamaAttention(LlamaAttention):
         assert self.is_causal, "implemented only for casual LLM"
         memdim = 2 * self.head_dim
         self.mem_proj = nn.Sequential(
-            GroupedLinear(self.num_heads, self.head_dim, memdim, bias=config.attention_bias),
+            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=config.attention_bias),
             nn.SiLU(inplace=True),
-            GroupedLinear(self.num_heads, memdim, self.head_dim, bias=config.attention_bias),
+            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=config.attention_bias),
             )
         gatedim = int(self.head_dim**0.5)
-        tmp = GroupedLinear(self.num_heads, gatedim, 1, bias=False)
-        '''
+        tmp = GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, gatedim, 1, bias=False)
         with torch.no_grad():
-            tmp.bias.fill_(0)
-            tmp.weight.fill_(0)
-        '''
+            tmp.weight.fill_(0.0)
         self.gate_proj = nn.Sequential(
-            GroupedLinear(self.num_heads, self.head_dim, gatedim, bias=config.attention_bias),
+            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, gatedim, bias=False),
             nn.SiLU(inplace=True),
             tmp,
-            BiasSigmoid()#nn.Sigmoid()
+            BiasScale()#nn.Sigmoid()
             )
 
     def forward(
@@ -91,10 +100,7 @@ class GMLlamaAttention(LlamaAttention):
         # use -1 to infer num_heads and num_key_value_heads as they may vary if tensor parallel is used
         query_states = query_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
-
-        # !!! retrieval from mem is more of content rather than position, not input q is not added to PE
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states) 
+        value_states = value_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2) 
 
         if position_embeddings is None:
             logger.warning_once(
@@ -107,6 +113,7 @@ class GMLlamaAttention(LlamaAttention):
         else:
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
@@ -127,7 +134,7 @@ class GMLlamaAttention(LlamaAttention):
         attn_output = torch.matmul(attn_weights, value_states)
 
         # !!! merge result with mem and gate
-        attn_output = (1-memgate) * attn_output + memgate * mem
+        attn_output = attn_output + memgate * mem
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
@@ -195,8 +202,6 @@ class GMLlamaFlashAttention2(GMLlamaAttention):
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
-        # !!! retrieval from mem is more of content rather than position, not input q is not added to PE
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states) 
 
         if position_embeddings is None:
             logger.warning_once(
@@ -209,6 +214,7 @@ class GMLlamaFlashAttention2(GMLlamaAttention):
         else:
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states) 
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
@@ -264,7 +270,7 @@ class GMLlamaFlashAttention2(GMLlamaAttention):
         )
 
         # !!! merge result with mem and gate
-        attn_output = (1-memgate) * attn_output + memgate * mem
+        attn_output = attn_output + memgate * mem
 
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
         attn_output = self.o_proj(attn_output)
@@ -324,8 +330,6 @@ class GMLlamaSdpaAttention(GMLlamaAttention):
         key_states = key_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
 
-        # !!! retrieval from mem is more of content rather than position, not input q is not added to PE
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states) 
 
         if position_embeddings is None:
             logger.warning_once(
@@ -338,6 +342,7 @@ class GMLlamaSdpaAttention(GMLlamaAttention):
         else:
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states) 
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
@@ -372,7 +377,7 @@ class GMLlamaSdpaAttention(GMLlamaAttention):
         )
 
         # !!! merge result with mem and gate
-        attn_output = (1-memgate) * attn_output + memgate * mem
+        attn_output = attn_output + memgate * mem
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, -1)
