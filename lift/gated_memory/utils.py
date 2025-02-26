@@ -1,5 +1,5 @@
 from transformers import AutoConfig, AutoTokenizer
-from .model import GMLlamaForCausalLM
+from model import GMLlamaForCausalLM
 from peft import get_peft_model, LoraConfig, TaskType
 
 
@@ -13,12 +13,15 @@ def preprocess(model_name_or_path: str, output_dir: str):
     model_config = AutoConfig.from_pretrained(model_name_or_path, local_files_only=True)
     model = GMLlamaForCausalLM.from_pretrained(model_name_or_path, config=model_config, local_files_only=True, low_cpu_mem_usage=False, _fast_init=False)
     lora_config = LoraConfig(
-        r=2,
+        r=1,
         target_modules=["lm_head"],
         task_type=TaskType.CAUSAL_LM,
-        lora_alpha=4,
+        lora_alpha=0.0,
         modules_to_save=[f"layers.{i}.self_attn.mem_proj" for i in range(len(model.model.layers))]+[f"layers.{i}.self_attn.gate_proj" for i in range(len(model.model.layers))],
     )
     model = get_peft_model(model, lora_config)
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
+
+if __name__ == "__main__":
+    preprocess("models/Meta-Llama-3-8B-Instruct", "models/LinGated-Memory-Llama-3-8B-Instruct")

@@ -14,4 +14,7 @@ shells/ablation
 shells/extra
 shells/mys
 shells/tune
-models/
+models
+datasets
+*.out
+parsed

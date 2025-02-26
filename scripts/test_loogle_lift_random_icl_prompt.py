@@ -55,16 +55,17 @@ class ICLContextDataset(Dataset):
         # Generate datapoints
         mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
         LIFT_ICL_PROMPT = "Given above context, please recite following segment of the context: \n\n\n"
-        prompt = self.tokenizer(LIFT_ICL_PROMPT, add_special_tokens=False)['input_ids']
+        prompt = self.tokenizer(LIFT_ICL_PROMPT, add_special_tokens=True)['input_ids']
 
         self.data = []
         for s in range(0, len(input_ids), len_offset):
             start_pos = s
             end_pos = min(s + len_segment, len(input_ids))
-            lift_icl_front, lift_icl_back = self.prepare_lift_icl(start_pos, end_pos, input_ids, len_segment, len_offset)
-            lift_icl = lift_icl_front + mixin + lift_icl_back
+            #lift_icl_front, lift_icl_back = self.prepare_lift_icl(start_pos, end_pos, input_ids, len_segment, len_offset)
+            #lift_icl = lift_icl_front + mixin + lift_icl_back
 
-            lift_icl += prompt 
+            lift_icl = prompt 
+            
             input_len = len(lift_icl)
             lift = input_ids[start_pos: end_pos]
 
@@ -117,7 +118,10 @@ class ICLContextDataset(Dataset):
         }
     
     def __getitem__(self, index):
-        return self.preprocessing(self.data[index])
+        ret = self.preprocessing(self.data[index])
+        #print(self.tokenizer.decode(ret["input_ids"], skip_special_tokens=False))
+        #print(self.tokenizer.decode(ret["labels"][ret["labels"]>=0], skip_special_tokens=False))
+        return ret
     
     def enable_qa(self):
         raise NotImplementedError
@@ -129,7 +133,7 @@ class ICLContextDataset(Dataset):
         raise NotImplementedError
 
 
-LOOGLEFORMAT_NON_ICL = "Based on the article {title}, please answer the following question: {question}"
+LOOGLEFORMAT_NON_ICL = "Based on the article {title}, please answer the following question briefly in one or two sentences: {question}"
 LOOGLEFORMAT = "The article {title}: \n{input}\nPlease answer the question based on {title}.\nQuestion: {question}\nAnswer: "
 LOOGLEFORMAT_COT = """The article {title}:
 {input}
@@ -230,6 +234,7 @@ class LooGLEDataset(ICLContextDataset):
             question_position = response.find("Question:")
             answer_position = response.find("Answer:")
             evidence_position = response.find("Evidence:")
+            
             if question_position == -1 or answer_position == -1 or evidence_position == -1:
                 continue
             question = response[question_position + 9:answer_position].strip()
@@ -241,7 +246,6 @@ class LooGLEDataset(ICLContextDataset):
         else:
             logging.warning("Fail to generate a QA pair, skip.")
             return None
-        
         if not use_icl:
             input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=question)
         else:
@@ -252,12 +256,14 @@ class LooGLEDataset(ICLContextDataset):
                 input_text = LOOGLEFORMAT.format(title=title, input=full_context, question=question)
 
         # print(f'syn input text: {input_text}')
-        example = input_text + ' ' + answer
-        input_ids = self.tokenizer(example, add_special_tokens=False)['input_ids']
-        input_length = len(self.tokenizer(input_text, add_special_tokens=False)['input_ids']) 
+        example = input_text + ' ' + answer# + self.tokenizer.eos_token
+        input_ids = self.tokenizer(example, add_special_tokens=True)['input_ids']
+        input_ids = input_ids + [self.tokenizer.eos_token_id]
+        input_length = len(self.tokenizer(input_text, add_special_tokens=True)['input_ids']) 
         mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
         output_length = len(input_ids) - input_length
         if len(input_ids) > model_max_length:
+            raise NotImplementedError
             input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
             input_length = len(input_ids) - output_length
         return (input_ids, input_length)
@@ -305,17 +311,19 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
                     input_text = LOOGLEFORMAT.format(title=title, input=context, question=qa_pair['Q'])
 
             # print(f'input_text: {input_text}')
-            input_ids = tokenizer(input_text, add_special_tokens=False)['input_ids']
+            input_ids = tokenizer(input_text, add_special_tokens=True)['input_ids']#[:-1]
+            # print(tokenizer.decode(input_ids, skip_special_tokens=False))
             if len(input_ids) > model_max_length:
+                raise NotImplementedError
                 input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
             input_ids = torch.tensor(input_ids, dtype=torch.long, device=model.device).unsqueeze(0)
             attention_mask = torch.ones_like(input_ids)
-            # terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
+            terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
             output = model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 pad_token_id=tokenizer.pad_token_id,
-                # eos_token_id=terminators,
+                eos_token_id=terminators,
                 max_new_tokens=200,
                 use_cache=True,
                 do_sample=False,
@@ -327,6 +335,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             'input': context,
             'qa_pairs': qa_pairs
         }
+        #print(output_case, flush=True)
         with open(output_file, 'a') as f:
             f.write(json.dumps(output_case) + '\n')
 

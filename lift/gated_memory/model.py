@@ -53,7 +53,7 @@ class BiasScale(nn.Module):
         super().__init__()
 
     def forward(self, x):
-        return 0.2 * x
+        return x#0.2 * x
 
 class GMLlamaAttention(LlamaAttention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
