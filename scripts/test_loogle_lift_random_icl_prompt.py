@@ -54,11 +54,11 @@ class ICLContextDataset(Dataset):
 
         # Generate datapoints
         mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
-        LIFT_ICL_PROMPT = "Given above context, please recite following segment of the context: \n\n\n"
+        LIFT_ICL_PROMPT = "Please repeat the following long segment in the <article>: "
         prompt = self.tokenizer(LIFT_ICL_PROMPT, add_special_tokens=True)['input_ids']
 
         self.data = []
-        for s in range(0, len(input_ids), len_offset):
+        for s in range(0, len(input_ids) - int(0.5*len_offset), len_offset):
             start_pos = s
             end_pos = min(s + len_segment, len(input_ids))
             #lift_icl_front, lift_icl_back = self.prepare_lift_icl(start_pos, end_pos, input_ids, len_segment, len_offset)
@@ -67,16 +67,16 @@ class ICLContextDataset(Dataset):
             lift_icl = prompt 
             
             input_len = len(lift_icl)
-            lift = input_ids[start_pos: end_pos]
+            #lift = input_ids[start_pos: end_pos]
 
-            self.data.append((lift_icl + lift, input_len))
+            self.data.append((lift_icl, start_pos, end_pos, int(0.5*(len_offset)), input_len))
 
-            tmp = lift_icl + lift
-
-        self.num_segments = len(self.data)  # record the number of context datapoints
+            #tmp = lift_icl + lift
+        self.input_ids = input_ids
+        #self.num_segments = len(self.data)  # record the number of context datapoints
 
     def __len__(self):
-        return self.num_segments
+        return len(self.data)#self.num_segments
     
     def prepare_lift_icl(self, start_pos: int, end_pos: int, input_ids: list[int], len_segment: int, len_offset: int, len_lift_icl: int=4096):
 
@@ -118,7 +118,15 @@ class ICLContextDataset(Dataset):
         }
     
     def __getitem__(self, index):
-        ret = self.preprocessing(self.data[index])
+        if len(self.data[index]) > 2:
+            lift_icl, start_pos, end_pos, var, input_len = self.data[index]
+            import random 
+            offset = random.randint(-var, var)
+            def constrainidx(a):
+                return min(max(a, 0), len(self.input_ids))
+            ret = self.preprocessing((lift_icl+self.input_ids[constrainidx(start_pos+offset): constrainidx(end_pos+offset)], input_len))
+        else:
+            ret = self.preprocessing(self.data[index])
         #print(self.tokenizer.decode(ret["input_ids"], skip_special_tokens=False))
         #print(self.tokenizer.decode(ret["labels"][ret["labels"]>=0], skip_special_tokens=False))
         return ret
@@ -133,7 +141,7 @@ class ICLContextDataset(Dataset):
         raise NotImplementedError
 
 
-LOOGLEFORMAT_NON_ICL = "Based on the article {title}, please answer the following question briefly in one or two sentences: {question}"
+LOOGLEFORMAT_NON_ICL = "Based on the <article>, please answer the following question concisely: \nQuestion: {question}\nAnswer: "
 LOOGLEFORMAT = "The article {title}: \n{input}\nPlease answer the question based on {title}.\nQuestion: {question}\nAnswer: "
 LOOGLEFORMAT_COT = """The article {title}:
 {input}
@@ -170,7 +178,7 @@ class LooGLEDataset(ICLContextDataset):
     def __init__(self, context: str, title: str, tokenizer: PreTrainedTokenizer, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_cot: bool=False, use_icl: bool=True):
         # Option 1: prepend title before context
         if title_option == 1:
-            context = title + '\n' + context
+            context = "Title: " + title + '\n' + context
         super().__init__(context, tokenizer, model_max_length, block_size, len_segment, len_offset)
         # Option 2: prepend title before each segment and predict the whole segment
         if title_option == 2:
@@ -181,7 +189,9 @@ class LooGLEDataset(ICLContextDataset):
             snippet = tokenizer(f"A snippet of {title}: ", add_special_tokens=False)['input_ids']
             self.data = [(snippet + input_ids, len(snippet)) for input_ids, _ in self.data]
         # Generate QA pairs
+        self.textdata = self.data
         if num_syn_qa > 0:
+            self.qadata = []
             context_sent = sent_tokenize(context)
             assert len(context_sent) >= 16, "The length of the context should be at least 25 sentences."
             generator = AutoModelForCausalLM.from_pretrained(
@@ -201,13 +211,13 @@ class LooGLEDataset(ICLContextDataset):
             for _ in range(num_syn_qa):
                 result = self.generate_task(generator, gen_tokenizer, context, context_sent, title, model_max_length, use_cot, use_icl=use_icl)
                 if result is not None:
-                    self.data.append(result)
+                    self.qadata.append(result)
         self.enable_qa_tag = False
     
     @torch.no_grad()
     def generate_task(self, generator: PreTrainedModel, tokenizer: PreTrainedTokenizer, full_context: str, context_sent: List[str], title: str, model_max_length: int, use_cot: bool=False, use_icl: bool=True):
-        st_pos = randint(0, len(context_sent) - 16)
-        context = ' '.join(context_sent[st_pos:st_pos+16])
+        st_pos = randint(0, len(context_sent) - 8)
+        context = ' '.join(context_sent[st_pos:st_pos+8])
         messages = [
             {
                 'role': "system",
@@ -215,7 +225,7 @@ class LooGLEDataset(ICLContextDataset):
             },
             {
                 'role': "user", 
-                'content': f"You are given a piece of text as the context. You should generate ONLY one question and the corresponding answer according to the context. You should also select one or more sentences directly from the original context as the evidence. The evidences must be verbatim sentences from the context. Please answer in the following format: \nQuestion: [question] \nAnswer: [answer] \nEvidence: [evidence]\nPlease DON'T output quotes when outputting evidences. The following is the piece of text: {context}"
+                'content': f"You are given a piece of text as the context. You should generate ONLY one question and the corresponding concise answer according to the context. You should also select one or more sentences directly from the original context as the evidence. The evidences must be verbatim sentences from the context. Please answer in the following format: \nQuestion: [question] \nAnswer: [answer] \nEvidence: [evidence]\nPlease DON'T output quotes when outputting evidences. The following is the piece of text: {context}"
             }
         ]
         input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(generator.device)
@@ -241,22 +251,21 @@ class LooGLEDataset(ICLContextDataset):
             answer = response[answer_position + 7:evidence_position].strip()
             evidence = response[evidence_position + 9:].strip()
             if evidence not in context:
-                continue
+                pass #continue
             break
         else:
             logging.warning("Fail to generate a QA pair, skip.")
             return None
         if not use_icl:
-            input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=question)
+            input_text = LOOGLEFORMAT_NON_ICL.format(question=question)
         else:
             if use_cot:
                 input_text = LOOGLEFORMAT_COT.format(title=title, input=full_context, question=question)
                 answer = evidence + "\n# Answer:\n" + answer + "\n# End of answer"
             else:
                 input_text = LOOGLEFORMAT.format(title=title, input=full_context, question=question)
-
-        # print(f'syn input text: {input_text}')
         example = input_text + ' ' + answer# + self.tokenizer.eos_token
+        print(f'syn input text: {example}')
         input_ids = self.tokenizer(example, add_special_tokens=True)['input_ids']
         input_ids = input_ids + [self.tokenizer.eos_token_id]
         input_length = len(self.tokenizer(input_text, add_special_tokens=True)['input_ids']) 
@@ -270,12 +279,14 @@ class LooGLEDataset(ICLContextDataset):
     
     def enable_qa(self):
         self.enable_qa_tag = True
+        self.data = self.textdata + self.qadata
         
     def disable_qa(self):
         self.enable_qa_tag = False
+        self.data = self.textdata
     
     def __len__(self):
-        return len(self.data) if self.enable_qa_tag else self.num_segments
+        return len(self.data) #if self.enable_qa_tag else self.num_segments
     
     
 def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_gated_memory: bool=False, use_cot: bool=False, use_icl: bool=True, **kwargs):
@@ -298,6 +309,13 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
         title = sample['title']
         # qa_pairs = sample['test_qa_pairs']
         qa_pairs = eval(sample['qa_pairs'])
+        #from copy import deepcopy
+        #tmp = deepcopy(qa_pairs[-1])
+        #tmp["Q"] = "Where is the capital of China?"
+        #qa_pairs.append(tmp) 
+        #tmp = deepcopy(qa_pairs[-1])
+        #tmp["Q"] = "Who is Xiyuan Wang?"
+        #qa_pairs.append(tmp)
         model = LooGLEtrain(context, title, tokenizer, training_args=training_args, num_syn_qa=num_syn_qa, title_option=title_option, generator_name_or_path=generator_name_or_path, use_cot=use_cot, use_icl=use_icl, **lift_args)
         model.eval()
         for qa_pair in tqdm.tqdm(qa_pairs, desc="QA Pair"):
@@ -310,7 +328,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
                 else:
                     input_text = LOOGLEFORMAT.format(title=title, input=context, question=qa_pair['Q'])
 
-            # print(f'input_text: {input_text}')
+            print(f'input_text: {input_text}')
             input_ids = tokenizer(input_text, add_special_tokens=True)['input_ids']#[:-1]
             # print(tokenizer.decode(input_ids, skip_special_tokens=False))
             if len(input_ids) > model_max_length:

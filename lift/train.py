@@ -71,7 +71,11 @@ def train(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrained
         dataset.enable_qa()
         training_args_syn = deepcopy(training_args)
         training_args_syn.num_train_epochs = involve_qa_epochs
-        training_args_syn.lr_scheduler_type = "constant"
+        #training_args_syn.lr_scheduler_type = "constant"
+        #training_args_syn.output_dir="./ckpts",
+        #training_args_syn.save_strategy="steps",  # Save every `save_steps`
+        #training_args_syn.save_steps=1,         # Save every 500 steps
+        #training_args_syn.save_total_limit=2,     # Keep only the last 2 checkpoints
         trainer_syn, model = load_trainer(
             model=model,
             training_dataset=dataset,

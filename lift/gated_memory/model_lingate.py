@@ -1,23 +1,8 @@
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Union, List
-from transformers.models.llama.modeling_llama import LlamaConfig, logger, apply_rotary_pos_emb, Cache, repeat_kv, math, LlamaAttention, is_flash_attn_greater_or_equal_2_10, FlashAttentionKwargs, StaticCache, _flash_attention_forward, LlamaDecoderLayer, LlamaPreTrainedModel, BaseModelOutputWithPast, DynamicCache, LlamaModel, GenerationMixin, KwargsForCausalLM, CausalLMOutputWithPast, LlamaRMSNorm
+from transformers.models.llama.modeling_llama import LlamaConfig, logger, apply_rotary_pos_emb, Cache, repeat_kv, math, LlamaAttention, is_flash_attn_greater_or_equal_2_10, FlashAttentionKwargs, StaticCache, _flash_attention_forward, LlamaDecoderLayer, LlamaPreTrainedModel, BaseModelOutputWithPast, DynamicCache, LlamaModel, GenerationMixin, KwargsForCausalLM, CausalLMOutputWithPast
 
-
-class MyRMSNorm(nn.Module):
-    def __init__(self, eps=1e-6):
-        """
-        LlamaRMSNorm is equivalent to T5LayerNorm
-        """
-        super().__init__()
-        self.variance_epsilon = eps
-        
-    def forward(self, hidden_states):
-        input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return hidden_states.to(input_dtype)
 
 class GroupedLinear(nn.Module):
     def __init__(self, num_repeat: int, group_size: int, indim: int, outdim: int, bias: bool=True) -> None:
@@ -82,7 +67,6 @@ class GMLlamaAttention(LlamaAttention):
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=config.attention_bias),
             nn.SiLU(inplace=True),
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=config.attention_bias),
-            MyRMSNorm()
             )
         gatedim = int(self.head_dim**0.5)
         tmp = GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, gatedim, 1, bias=False)
