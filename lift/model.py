@@ -14,7 +14,7 @@ from peft import (
 from typing import Optional
 from copy import deepcopy
 import torch
-from .gated_memory.model import GMLlamaForCausalLM
+from .gated_memory.model_qwen import GMQwen2ForCausalLM
 
 
 def load_tokenizer(tokenizer_name_or_path: str):
@@ -43,7 +43,7 @@ def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8
                 bnb_4bit_use_double_quant=True,
                 bnb_4bit_compute_dtype=torch.bfloat16,
             )
-            model = GMLlamaForCausalLM.from_pretrained(
+            model = GMQwen2ForCausalLM.from_pretrained(
                 model_name_or_path,
                 trust_remote_code=True,
                 device_map="auto",
@@ -53,7 +53,7 @@ def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8
         elif load_in_8bit:
             raise NotImplementedError
         else:
-            model = GMLlamaForCausalLM.from_pretrained(
+            model = GMQwen2ForCausalLM.from_pretrained(
                 model_name_or_path,
                 trust_remote_code=True,
                 device_map="auto",

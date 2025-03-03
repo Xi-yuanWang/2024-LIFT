@@ -20,9 +20,9 @@ python scripts/mp_wrapper.py \
     --overwrite False \
     --num_syn_qa 10 \
     --title_option 1 \
-    --generator_name_or_path models/Meta-Llama-3-8B-Instruct \
-    --model_name_or_path models/LinGated-Memory-Llama-3-8B-Instruct \
-    --model_max_length 7800 \
+    --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
+    --model_name_or_path models/LinGated-Memory-Qwen2.5-32B-Instruct \
+    --model_max_length 32000 \
     --block_size 256 \
     --len_segment 24 \
     --len_offset 8 \
@@ -32,8 +32,8 @@ python scripts/mp_wrapper.py \
     --use_lora False \
     --use_cot False \
     --gather_batches True \
-    --involve_qa_epochs 30 \
-    --num_train_epochs 0 \
+    --involve_qa_epochs 0 \
+    --num_train_epochs 30 \
     --remove_unused_columns True \
     --report_to none \
     --output_dir models/temp \

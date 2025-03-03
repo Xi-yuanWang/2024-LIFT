@@ -1,5 +1,5 @@
 from transformers import AutoConfig, AutoTokenizer
-from model import GMLlamaForCausalLM
+from model_qwen import GMQwen2ForCausalLM
 from peft import get_peft_model, LoraConfig, TaskType
 
 
@@ -11,7 +11,7 @@ def preprocess(model_name_or_path: str, output_dir: str):
     """
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, local_files_only=True)
     model_config = AutoConfig.from_pretrained(model_name_or_path, local_files_only=True)
-    model = GMLlamaForCausalLM.from_pretrained(model_name_or_path, config=model_config, local_files_only=True, low_cpu_mem_usage=False, _fast_init=False)
+    model = GMQwen2ForCausalLM.from_pretrained(model_name_or_path, config=model_config, local_files_only=True, low_cpu_mem_usage=False, _fast_init=False)
     lora_config = LoraConfig(
         r=1,
         target_modules=["lm_head"],
@@ -24,4 +24,4 @@ def preprocess(model_name_or_path: str, output_dir: str):
     tokenizer.save_pretrained(output_dir)
 
 if __name__ == "__main__":
-    preprocess("models/Meta-Llama-3-8B-Instruct", "models/LinGated-Memory-Llama-3-8B-Instruct")
+    preprocess("/ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct", "models/LinGated-Memory-Qwen2.5-32B-Instruct")
