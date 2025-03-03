@@ -19,7 +19,7 @@ from lift.context_dataset import ContextDataset
 from lift.model import load_tokenizer, load_model
 from lift.train import train
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional,Tuple
+from typing import List, Dict, Optional
 from numpy.random import randint
 from nltk import sent_tokenize
 import logging
@@ -27,156 +27,73 @@ import json
 import os
 import torch
 import tqdm
-from torch.utils.data import Dataset
-from copy import deepcopy
 
 
-class ICLContextDataset(Dataset):
-    """Given a piece of context, `ContextDataset` creates a torch-Dataset, using the truncation strategy described in our paper.
-    """
-    def __init__(self, context: str, tokenizer: PreTrainedTokenizer, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3):
-        """
-        Args:
-            context (str): the context to train on.
-            tokenizer (PreTrainedTokenizer): the AutoTokenizer.
-            model_max_length (int): OPTIONAL, default to `4096`; the texts will be clipped at the `model_max_length`-th token.
-            block_size (int): OPTIONAL, default to `256`; the number of tokens in a block; a block is the unit of segments and offsets.
-            len_segment (int): OPTIONAL, default to `8`; the number of units in a segment; the article is divided into segments.
-            len_offset (int): OPTIONAL, default to `3`; the number of units per offset; it determines the offset from one segment to the next one.
-        """
-        self.ignore_index = -100  # The default value for ignored labels in torch
-        self.tokenizer = tokenizer
-        self.model_max_length = model_max_length
-        texts = context.replace('\0', ' ')
-        input_ids = self.tokenizer(texts, add_special_tokens=False)['input_ids']
-        len_segment = len_segment * block_size
-        len_offset = len_offset * block_size
+LOOGLE_CHAT = "The article {title}: \n{input}\nPlease answer the question based on {title}.\nQuestion: {question}\nAnswer: "
+LOOGLE_NON_CHAT = """Below is an instruction that describes a task, paired with an input that provides further context.
+Write a response that appropriately completes the request.
 
-        # Generate datapoints
-        mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
-        LIFT_ICL_PROMPT = "Given above context, please recite following segment of the context: \n\n\n"
-        prompt = self.tokenizer(LIFT_ICL_PROMPT, add_special_tokens=False)['input_ids']
+### Instruction:
+You are given an article {title}. Please answer the question based on {title}. Question: {question}.
 
-        self.data = []
-        for s in range(0, len(input_ids), len_offset):
-            start_pos = s
-            end_pos = min(s + len_segment, len(input_ids))
-            lift_icl_front, lift_icl_back = self.prepare_lift_icl(start_pos, end_pos, input_ids, len_segment, len_offset)
-            lift_icl = lift_icl_front + mixin + lift_icl_back
-
-            lift_icl += prompt 
-            input_len = len(lift_icl)
-            lift = input_ids[start_pos: end_pos]
-
-            self.data.append((lift_icl + lift, input_len))
-
-            tmp = lift_icl + lift
-
-        self.num_segments = len(self.data)  # record the number of context datapoints
-
-    def __len__(self):
-        return self.num_segments
-    
-    def prepare_lift_icl(self, start_pos: int, end_pos: int, input_ids: list[int], len_segment: int, len_offset: int, len_lift_icl: int=4096):
-
-        def get_fix_length_segments(front_lim: int, back_lim: int, tot_len: int):
-            """
-                return two segments,
-                satisfying frist segment length is less than 'front_lim', 
-                second segment length is less than 'back_lim'
-                and the sum of two segments' length is equal to 'tot_len'.
-
-
-                The return value is the length of the two segments.
-            """
-            a = randint(max(0, tot_len - back_lim), min(front_lim, tot_len))
-            b = tot_len - a
-            return a, b
-
-        front_len, back_len = get_fix_length_segments(len_lift_icl, len_lift_icl, len_lift_icl)
-        front_st = randint(0, len_lift_icl - front_len)
-        back_ed = randint(0, len_lift_icl - back_len)
-
-        return input_ids[front_st: front_st+front_len], input_ids[-back_ed-back_len:-back_ed] if back_ed != 0 else input_ids[-back_len:]
-
-    def preprocessing(self, example: Tuple[List[int], int]):
-        input_ids, len_input = example
-        labels = deepcopy(input_ids)
-        # Clip and truncation
-        input_ids = input_ids[:self.model_max_length]
-        labels = labels[:self.model_max_length]
-        # Transfer to Tensor
-        input_ids = torch.tensor(input_ids, dtype=torch.long)
-        labels = torch.tensor(labels, dtype=torch.long)
-        labels[:len_input] = self.ignore_index  # mask the unsupervised part
-        attention_mask = torch.ones_like(input_ids)
-        return {
-            'input_ids': input_ids,
-            'labels': labels,
-            'attention_mask': attention_mask,
-        }
-    
-    def __getitem__(self, index):
-        return self.preprocessing(self.data[index])
-    
-    def enable_qa(self):
-        raise NotImplementedError
-    
-    def disable_qa(self):
-        raise NotImplementedError
-    
-    def generate_task(self):
-        raise NotImplementedError
-
-
-LOOGLEFORMAT_NON_ICL = "Based on the article {title}, please answer the following question: {question}"
-LOOGLEFORMAT = "The article {title}: \n{input}\nPlease answer the question based on {title}.\nQuestion: {question}\nAnswer: "
-LOOGLEFORMAT_COT = """The article {title}:
+### Input:
 {input}
-Please recall one or several original sentences from article {title} as evidence, and then answer the question solely based on this evidence.
-Please answer in the following format:
 
-# Evidence:
-[evidence]
-# Answer:
-[answer]
-# End of answer
-
-Please DON'T output quotes when outputing evidences.
-# Question:
-{question}
-# Evidence:
+### Response:
 """
 
 
 @dataclass
 class TestArguments:
-    input_file: str = field(metadata={"help": "The input file for the test."})
-    output_file: str = field(metadata={"help": "The output file for the test."})
-    overwrite: bool = field(default=False, metadata={"help": "Whether to overwrite the output file."})
-    num_syn_qa: int = field(default=0, metadata={"help": "The number of synthetic QA pairs to generate."})
-    title_option: int = field(default=1, metadata={"help": "The title option for the LooGLE dataset."})
-    generator_name_or_path: Optional[str] = field(default=None, metadata={"help": "The generator model name or path."})
-    use_cot: bool = field(default=False, metadata={'help': "Whether to use CoT in syn. QA and test."})
-    num_test: Optional[int] = field(default=None, metadata={'help': "Test only the first several articles."})
-    use_icl: bool = field(default=True, metadata={'help': "Whether to use ICL when training and testing."})
+    input_file: str = field(
+        default=None,
+        metadata={"help": "The input file for the test."}
+    )
+    output_file: str = field(
+        default=None,
+        metadata={"help": "The output file for the test."}
+    )
+    overwrite: bool = field(
+        default=False,
+        metadata={"help": "Overwrite the output file."}
+    )
+    num_syn_qa: int = field(
+        default=0,
+        metadata={"help": "The number of auxiliary tasks (synthetic QAs)."}
+    )
+    generator_name_or_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "The generator model name or path. Required if num_syn_qa > 0."}
+    )
+    num_test: Optional[int] = field(
+        default=None,
+        metadata={'help': "Test only the first several articles."}
+    )
+    use_chat_template: bool = field(
+        default=False,
+        metadata={'help': "Apply chat template to the auxiliary tasks and LooGLE test tasks."}
+    )
 
 
-class LooGLEDataset(ICLContextDataset):
-    def __init__(self, context: str, title: str, tokenizer: PreTrainedTokenizer, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_cot: bool=False, use_icl: bool=True):
-        # Option 1: prepend title before context
-        if title_option == 1:
-            context = title + '\n' + context
+class LooGLEDataset(ContextDataset):
+    def __init__(
+        self,
+        context: str,
+        title: str,
+        tokenizer: PreTrainedTokenizer,
+        model_max_length: int = 7800,
+        block_size: int = 256,
+        len_segment: int = 8,
+        len_offset: int = 3,
+        num_syn_qa: int = 0,
+        generator_name_or_path: Optional[str] = None,
+        use_chat_template: bool = False,
+    ):
+        context = title + '\n' + context
         super().__init__(context, tokenizer, model_max_length, block_size, len_segment, len_offset)
-        # Option 2: prepend title before each segment and predict the whole segment
-        if title_option == 2:
-            snippet = tokenizer(f"A snippet of {title}: ", add_special_tokens=False)['input_ids']
-            self.data = [(snippet + input_ids, 0) for input_ids, _ in self.data]
-        # Option 3: prepend title before each segment and predict the content
-        if title_option == 3:
-            snippet = tokenizer(f"A snippet of {title}: ", add_special_tokens=False)['input_ids']
-            self.data = [(snippet + input_ids, len(snippet)) for input_ids, _ in self.data]
         # Generate QA pairs
+        self.qa_data = []
+        self.num_syn_qa = num_syn_qa
         if num_syn_qa > 0:
             context_sent = sent_tokenize(context)
             assert len(context_sent) >= 16, "The length of the context should be at least 25 sentences."
@@ -193,14 +110,31 @@ class LooGLEDataset(ICLContextDataset):
             )
             gen_tokenizer = load_tokenizer(generator_name_or_path)
             generator.eval()
-            for _ in range(num_syn_qa):
-                result = self.generate_task(generator, gen_tokenizer, context, context_sent, title, model_max_length, use_cot, use_icl=use_icl)
+            while len(self.qa_data) < num_syn_qa:
+                result = self.generate_task(
+                    generator=generator,
+                    gen_tokenizer=gen_tokenizer,
+                    full_context=context,
+                    context_sent=context_sent,
+                    title=title,
+                    model_max_length=model_max_length,
+                    use_chat_template=use_chat_template,
+                )
                 if result is not None:
-                    self.data.append(result)
+                    self.qa_data.append(result)
         self.enable_qa_tag = False
     
     @torch.no_grad()
-    def generate_task(self, generator: PreTrainedModel, tokenizer: PreTrainedTokenizer, full_context: str, context_sent: List[str], title: str, model_max_length: int, use_cot: bool=False, use_icl: bool=True):
+    def generate_task(
+        self,
+        generator: PreTrainedModel,
+        gen_tokenizer: PreTrainedTokenizer,
+        full_context: str,
+        context_sent: List[str],
+        title: str,
+        model_max_length: int = 7800,
+        use_chat_template: bool = False,
+    ):
         st_pos = randint(0, len(context_sent) - 16)
         context = ' '.join(context_sent[st_pos:st_pos+16])
         messages = [
@@ -213,19 +147,18 @@ class LooGLEDataset(ICLContextDataset):
                 'content': f"You are given a piece of text as the context. You should generate ONLY one question and the corresponding answer according to the context. You should also select one or more sentences directly from the original context as the evidence. The evidences must be verbatim sentences from the context. Please answer in the following format: \nQuestion: [question] \nAnswer: [answer] \nEvidence: [evidence]\nPlease DON'T output quotes when outputting evidences. The following is the piece of text: {context}"
             }
         ]
-        input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(generator.device)
+        input_ids = gen_tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(generator.device)
         mask_attention = torch.ones_like(input_ids)
-        terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
         for _ in range(5):
             outputs = generator.generate(
                 input_ids=input_ids,
                 attention_mask=mask_attention.to(generator.device),
                 max_new_tokens=1024,
-                pad_token_id=tokenizer.eos_token_id,
-                eos_token_id=terminators,
+                pad_token_id=gen_tokenizer.eos_token_id,
+                eos_token_id=gen_tokenizer.eos_token_id,
                 do_sample=True,
             )
-            response = tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
+            response = gen_tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
             question_position = response.find("Question:")
             answer_position = response.find("Answer:")
             evidence_position = response.find("Evidence:")
@@ -241,19 +174,20 @@ class LooGLEDataset(ICLContextDataset):
             logging.warning("Fail to generate a QA pair, skip.")
             return None
         
-        if not use_icl:
-            input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=question)
+        if use_chat_template:
+            messages = [
+                {'role': 'system', 'content': "You are a helpful assistant."},
+                {'role': 'user', 'content': LOOGLE_CHAT.format(title=title, input=full_context, question=question)},
+                {'role': 'assistant', 'content': answer},
+            ]
+            input_ids = self.tokenizer.apply_chat_template(messages, add_generation_prompt=False)
+            input_length = len(self.tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True))
         else:
-            if use_cot:
-                input_text = LOOGLEFORMAT_COT.format(title=title, input=full_context, question=question)
-                answer = evidence + "\n# Answer:\n" + answer + "\n# End of answer"
-            else:
-                input_text = LOOGLEFORMAT.format(title=title, input=full_context, question=question)
+            instruction_text = LOOGLE_NON_CHAT.format(title=title, input=full_context, question=question)
+            input_text = instruction_text + answer
+            input_ids = [self.tokenizer.bos_token_id] + self.tokenizer(input_text, add_special_tokens=False)['input_ids'] + [self.tokenizer.eos_token_id]
+            input_length = len(self.tokenizer(instruction_text, add_special_tokens=False)['input_ids']) + 1
 
-        # print(f'syn input text: {input_text}')
-        example = input_text + ' ' + answer
-        input_ids = self.tokenizer(example, add_special_tokens=False)['input_ids']
-        input_length = len(self.tokenizer(input_text, add_special_tokens=False)['input_ids']) 
         mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
         output_length = len(input_ids) - input_length
         if len(input_ids) > model_max_length:
@@ -267,11 +201,37 @@ class LooGLEDataset(ICLContextDataset):
     def disable_qa(self):
         self.enable_qa_tag = False
     
+    def __getitem__(self, index):
+        return self.preprocessing(self.data[index]) if index < self.num_segments else self.preprocessing(self.qa_data[index - self.num_segments])
+    
     def __len__(self):
-        return len(self.data) if self.enable_qa_tag else self.num_segments
+        return self.num_segments + self.num_syn_qa if self.enable_qa_tag else self.num_segments
     
     
-def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_gated_memory: bool=False, use_cot: bool=False, use_icl: bool=True, use_prefix_tuning: bool=False, num_virtual_tokens: Optional[int]=None, **kwargs):
+def LooGLEtrain(
+    context: str = None,
+    title: str = None,
+    tokenizer: PreTrainedTokenizer = None,
+    num_syn_qa: int = 0,
+    generator_name_or_path: Optional[str] = None,
+    use_chat_template: bool = False,
+    training_args: TrainingArguments = None,
+    model_name_or_path: str = None,
+    model_max_length: int = 7800,
+    block_size: int = 256,
+    len_segment: int = 8,
+    len_offset: int = 3,
+    use_lora: bool = False,
+    lora_rank: Optional[int] = None,
+    use_pissa: bool = False,
+    load_in_4bit: bool = False,
+    involve_qa_epochs: int = 0,
+    gather_batches: bool = True,
+    use_gated_memory: bool = False,
+    use_prefix_tuning: bool = False,
+    num_virtual_tokens: Optional[int]=None,
+    **kwargs
+):
     model = load_model(
         model_name_or_path=model_name_or_path,
         use_lora=use_lora,
@@ -283,21 +243,33 @@ def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_
         use_prefix_tuning=use_prefix_tuning,
         num_virtual_tokens=num_virtual_tokens
     )
-    dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
+    dataset = LooGLEDataset(
+        context=context,
+        title=title,
+        tokenizer=tokenizer,
+        model_max_length=model_max_length,
+        block_size=block_size,
+        len_segment=len_segment,
+        len_offset=len_offset,
+        num_syn_qa=num_syn_qa,
+        generator_name_or_path=generator_name_or_path,
+        use_chat_template=use_chat_template
+    )
     if use_lora or use_gated_memory or use_prefix_tuning:
         model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
-    losses = []
-    with torch.no_grad():
-        for sample in dataset:
-            input_ids = sample['input_ids'].cuda().unsqueeze(0)
-            attention_mask = sample['attention_mask'].cuda().unsqueeze(0)
-            labels = sample['labels'].cuda().unsqueeze(0)
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-            losses.append(outputs['loss'].cpu().item())
-    return model, sum(losses) / len(losses)
+    return model
 
 
-def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Dict, output_file: str, num_resumed: int=0, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_cot: bool=False, use_icl: bool=True):
+def prediction(
+    data: List[Dict],
+    training_args: TrainingArguments,
+    lift_args: Dict,
+    output_file: str,
+    num_resumed: int = 0,
+    num_syn_qa: int = 0,
+    generator_name_or_path: Optional[str] = None,
+    use_chat_template: bool = False
+):
     tokenizer = load_tokenizer(lift_args['tokenizer_name_or_path'])
     mixin = tokenizer("...", add_special_tokens=False)['input_ids']
     model_max_length = lift_args['model_max_length']
@@ -307,32 +279,38 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             continue
         context = sample['input']
         title = sample['title']
-        # qa_pairs = sample['test_qa_pairs']
         qa_pairs = eval(sample['qa_pairs'])
-        model, loss = LooGLEtrain(context, title, tokenizer, training_args=training_args, num_syn_qa=num_syn_qa, title_option=title_option, generator_name_or_path=generator_name_or_path, use_cot=use_cot, use_icl=use_icl, **lift_args)
+        model = LooGLEtrain(
+            context=context,
+            title=title,
+            tokenizer=tokenizer,
+            num_syn_qa=num_syn_qa,
+            generator_name_or_path=generator_name_or_path,
+            use_chat_template=use_chat_template,
+            training_args=training_args,
+            **lift_args,
+        )
         model.eval()
         for qa_pair in tqdm.tqdm(qa_pairs, desc="QA Pair"):
-
-            if not use_icl:
-                input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=qa_pair['Q'])
+            if use_chat_template:
+                messages = [
+                    {'role': 'system', 'content': "You are a helpful assistant."},
+                    {'role': 'user', 'content': LOOGLE_CHAT.format(title=title, input=context, question=qa_pair['Q'])},
+                ]
+                input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
             else:
-                if use_cot:
-                    input_text = LOOGLEFORMAT_COT.format(title=title, input=context, question=qa_pair['Q'])
-                else:
-                    input_text = LOOGLEFORMAT.format(title=title, input=context, question=qa_pair['Q'])
+                input_text = LOOGLE_NON_CHAT.format(title=title, input=context, question=qa_pair['Q'])
+                input_ids = [tokenizer.bos_token_id] + tokenizer(input_text, add_special_tokens=False)['input_ids']
 
-            # print(f'input_text: {input_text}')
-            input_ids = tokenizer(input_text, add_special_tokens=False)['input_ids']
             if len(input_ids) > model_max_length:
                 input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
             input_ids = torch.tensor(input_ids, dtype=torch.long, device=model.device).unsqueeze(0)
             attention_mask = torch.ones_like(input_ids)
-            # terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
             output = model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 pad_token_id=tokenizer.pad_token_id,
-                # eos_token_id=terminators,
+                eos_token_id=tokenizer.eos_token_id,
                 max_new_tokens=200,
                 use_cache=True,
                 do_sample=False,
@@ -343,7 +321,6 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             'title': title,
             'input': context,
             'qa_pairs': qa_pairs,
-            'loss': loss
         }
         with open(output_file, 'a') as f:
             f.write(json.dumps(output_case) + '\n')
@@ -358,10 +335,6 @@ def main():
     output_file = test_args.pop('output_file')
     overwrite = test_args.pop('overwrite')
     num_test = test_args.pop('num_test')
-    use_icl = test_args.pop('use_icl')
-
-    if not use_icl:
-        assert test_args['use_cot'] is False, "CoT is not supported in non-ICL mode."
 
     num_resumed = 0
     if os.path.exists(output_file):
@@ -374,7 +347,7 @@ def main():
         input_data = [json.loads(line) for line in f]
     if num_test is not None:
         input_data = input_data[:num_test]
-    prediction(input_data, training_args, lift_args, output_file, num_resumed=num_resumed, use_icl=use_icl, **test_args)
+    prediction(input_data, training_args, lift_args, output_file, num_resumed=num_resumed, **test_args)
 
 
 if __name__ == '__main__':
