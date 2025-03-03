@@ -34,7 +34,7 @@ from copy import deepcopy
 class ICLContextDataset(Dataset):
     """Given a piece of context, `ContextDataset` creates a torch-Dataset, using the truncation strategy described in our paper.
     """
-    def __init__(self, context: str, tokenizer: PreTrainedTokenizer, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3):
+    def __init__(self, title: str, context: str, tokenizer: PreTrainedTokenizer, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3):
         """
         Args:
             context (str): the context to train on.
@@ -54,7 +54,7 @@ class ICLContextDataset(Dataset):
 
         # Generate datapoints
         mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
-        LIFT_ICL_PROMPT = "<im_start>user\nPlease recite one long segment in the <|object_ref_start|>{title}<|object_ref_end|>:<im_end>\n<im_start>assistant\n"
+        LIFT_ICL_PROMPT = f"<|im_start|>user\nPlease remember an article and use it to answer a question later. One long segment in the article <<{title}>> is ..."
         prompt = self.tokenizer(LIFT_ICL_PROMPT, add_special_tokens=False)['input_ids']
 
         self.data = []
@@ -118,6 +118,7 @@ class ICLContextDataset(Dataset):
         }
     
     def __getitem__(self, index):
+        #print(index)
         if len(self.data[index]) > 2:
             lift_icl, start_pos, end_pos, var, input_len = self.data[index]
             import random 
@@ -141,7 +142,7 @@ class ICLContextDataset(Dataset):
         raise NotImplementedError
 
 
-LOOGLEFORMAT_NON_ICL = "<im_start>user\nBased on the <|object_ref_start|>{title}<|object_ref_end|>, please answer the following question concisely: \nQuestion: {question}<im_end>\n<im_start>assistant\nAnswer: "
+LOOGLEFORMAT_NON_ICL = "<|im_start|>user\nBased on the article <<{title}>>, please answer the following question concisely and accurately: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
 LOOGLEFORMAT = "The article {title}: \n{input}\nPlease answer the question based on {title}.\nQuestion: {question}\nAnswer: "
 LOOGLEFORMAT_COT = """The article {title}:
 {input}
@@ -179,7 +180,7 @@ class LooGLEDataset(ICLContextDataset):
         # Option 1: prepend title before context
         if title_option == 1:
             context = "Title: " + title + '\n' + context
-        super().__init__(context, tokenizer, model_max_length, block_size, len_segment, len_offset)
+        super().__init__(title, context, tokenizer, model_max_length, block_size, len_segment, len_offset)
         # Option 2: prepend title before each segment and predict the whole segment
         if title_option == 2:
             snippet = tokenizer(f"A snippet of {title}: ", add_special_tokens=False)['input_ids']
@@ -357,7 +358,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
         }
         #print(output_case, flush=True)
         with open(output_file, 'a') as f:
-            f.write(json.dumps(output_case, indent=2) + '\n')
+            f.write(json.dumps(output_case) + '\n')
 
 
 def main():
