@@ -32,8 +32,8 @@ python scripts/mp_wrapper.py \
     --use_lora False \
     --use_cot False \
     --gather_batches True \
-    --involve_qa_epochs 30 \
-    --num_train_epochs 0 \
+    --involve_qa_epochs 0 \
+    --num_train_epochs 30 \
     --remove_unused_columns True \
     --report_to none \
     --output_dir models/temp \
