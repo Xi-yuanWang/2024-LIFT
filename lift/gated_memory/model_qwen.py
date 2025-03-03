@@ -15,7 +15,7 @@ class GMQwen2Attention(Qwen2Attention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
     def __init__(self, config: Qwen2Config, layer_idx: int):
-        super().__init__()
+        super().__init__(config, layer_idx)
         assert self.is_causal, "implemented only for casual LLM"
         self.num_key_value_heads = self.config.num_key_value_heads
         memdim = 2 * self.head_dim
@@ -92,7 +92,7 @@ class GMQwen2Attention(Qwen2Attention):
             **kwargs,
         )
 
-        attn_output = attn_output + memgate * mem
+        attn_output = attn_output + (memgate * mem).transpose(1, 2)
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
@@ -101,7 +101,7 @@ class GMQwen2Attention(Qwen2Attention):
 
 class GMQwen2DecoderLayer(Qwen2DecoderLayer):
     def __init__(self, config: Qwen2Config, layer_idx: int):
-        super().__init__()
+        super().__init__(config, layer_idx)
         self.self_attn = GMQwen2Attention(config=config, layer_idx=layer_idx)
         
     def forward(

@@ -54,8 +54,8 @@ class ICLContextDataset(Dataset):
 
         # Generate datapoints
         mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
-        LIFT_ICL_PROMPT = "Please repeat the following long segment in the <article>: "
-        prompt = self.tokenizer(LIFT_ICL_PROMPT, add_special_tokens=True)['input_ids']
+        LIFT_ICL_PROMPT = "<im_start>user\nPlease recite one long segment in the <|object_ref_start|>{title}<|object_ref_end|>:<im_end>\n<im_start>assistant\n"
+        prompt = self.tokenizer(LIFT_ICL_PROMPT, add_special_tokens=False)['input_ids']
 
         self.data = []
         for s in range(0, len(input_ids) - int(0.5*len_offset), len_offset):
@@ -141,7 +141,7 @@ class ICLContextDataset(Dataset):
         raise NotImplementedError
 
 
-LOOGLEFORMAT_NON_ICL = "Based on the <article>, please answer the following question concisely: \nQuestion: {question}\nAnswer: "
+LOOGLEFORMAT_NON_ICL = "<im_start>user\nBased on the <|object_ref_start|>{title}<|object_ref_end|>, please answer the following question concisely: \nQuestion: {question}<im_end>\n<im_start>assistant\nAnswer: "
 LOOGLEFORMAT = "The article {title}: \n{input}\nPlease answer the question based on {title}.\nQuestion: {question}\nAnswer: "
 LOOGLEFORMAT_COT = """The article {title}:
 {input}
@@ -230,14 +230,16 @@ class LooGLEDataset(ICLContextDataset):
         ]
         input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(generator.device)
         mask_attention = torch.ones_like(input_ids)
-        terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
+        # terminators = [tokenizer.eos_token_id, tokenizer.pad_token_id]
+        # print("sp token", tokenizer.pad_token_id, tokenizer.eos_token_id)
         for _ in range(5):
+            # print(input_ids)
             outputs = generator.generate(
                 input_ids=input_ids,
                 attention_mask=mask_attention.to(generator.device),
                 max_new_tokens=1024,
-                pad_token_id=tokenizer.eos_token_id,
-                eos_token_id=terminators,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
                 do_sample=False,
             )
             response = tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
@@ -257,7 +259,7 @@ class LooGLEDataset(ICLContextDataset):
             logging.warning("Fail to generate a QA pair, skip.")
             return None
         if not use_icl:
-            input_text = LOOGLEFORMAT_NON_ICL.format(question=question)
+            input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=question)
         else:
             if use_cot:
                 input_text = LOOGLEFORMAT_COT.format(title=title, input=full_context, question=question)
@@ -266,9 +268,9 @@ class LooGLEDataset(ICLContextDataset):
                 input_text = LOOGLEFORMAT.format(title=title, input=full_context, question=question)
         example = input_text + ' ' + answer# + self.tokenizer.eos_token
         print(f'syn input text: {example}')
-        input_ids = self.tokenizer(example, add_special_tokens=True)['input_ids']
+        input_ids = self.tokenizer(example, add_special_tokens=False)['input_ids']
         input_ids = input_ids + [self.tokenizer.eos_token_id]
-        input_length = len(self.tokenizer(input_text, add_special_tokens=True)['input_ids']) 
+        input_length = len(self.tokenizer(input_text, add_special_tokens=False)['input_ids']) 
         mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
         output_length = len(input_ids) - input_length
         if len(input_ids) > model_max_length:
@@ -329,19 +331,19 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
                     input_text = LOOGLEFORMAT.format(title=title, input=context, question=qa_pair['Q'])
 
             print(f'input_text: {input_text}')
-            input_ids = tokenizer(input_text, add_special_tokens=True)['input_ids']#[:-1]
-            # print(tokenizer.decode(input_ids, skip_special_tokens=False))
+            input_ids = tokenizer(input_text, add_special_tokens=False)['input_ids']#[:-1]
+            print(tokenizer.decode(input_ids, skip_special_tokens=False))
             if len(input_ids) > model_max_length:
                 raise NotImplementedError
                 input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
             input_ids = torch.tensor(input_ids, dtype=torch.long, device=model.device).unsqueeze(0)
             attention_mask = torch.ones_like(input_ids)
-            terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
+            #terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
             output = model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=terminators,
+                eos_token_id=tokenizer.eos_token_id,
                 max_new_tokens=200,
                 use_cache=True,
                 do_sample=False,
@@ -355,7 +357,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
         }
         #print(output_case, flush=True)
         with open(output_file, 'a') as f:
-            f.write(json.dumps(output_case) + '\n')
+            f.write(json.dumps(output_case, indent=2) + '\n')
 
 
 def main():

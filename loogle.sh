@@ -15,10 +15,10 @@ python scripts/mp_wrapper.py \
     --script scripts/test_loogle_lift_random_icl_prompt.py \
     --num_process 1 \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.jsonl \
+    --output_file outputs/subset.qwen32B.debug2.jsonl \
     --subprocess_args \
     --overwrite False \
-    --num_syn_qa 10 \
+    --num_syn_qa 1 \
     --title_option 1 \
     --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
     --model_name_or_path models/LinGated-Memory-Qwen2.5-32B-Instruct \
@@ -31,9 +31,9 @@ python scripts/mp_wrapper.py \
     --use_icl False \
     --use_lora False \
     --use_cot False \
-    --gather_batches True \
+    --gather_batches False \
     --involve_qa_epochs 0 \
-    --num_train_epochs 30 \
+    --num_train_epochs 7 \
     --remove_unused_columns True \
     --report_to none \
     --output_dir models/temp \

@@ -28,7 +28,7 @@ def main(args):
     for mp_input_file, mp_input_d in zip(mp_input_files, mp_input_data):
         with open(mp_input_file, 'w') as f:
             for d in mp_input_d:
-                f.write(json.dumps(d) + '\n')
+                f.write(json.dumps(d, indent=2) + '\n')
     
     # prepare output filename
     mp_output_files = prepare_split_filename(MP_OUTPUT_DIR, args.output_file, args.num_test, args.num_process)
@@ -64,7 +64,7 @@ def collect_output(output_file, mp_output_files, num_process):
     
     with open(output_file, 'w') as f:
         for o in output:
-            f.write(json.dumps(o) + '\n')
+            f.write(json.dumps(o, indent=2) + '\n')
 
 def run_command(rank: int, args, input_file, output_file):
     env = os.environ.copy()
