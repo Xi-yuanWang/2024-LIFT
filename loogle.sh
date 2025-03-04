@@ -15,7 +15,7 @@ python scripts/mp_wrapper.py \
     --script scripts/test_loogle_lift_random_icl_prompt.py \
     --num_process 1 \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.qwen32B.debug9.jsonl \
+    --output_file outputs/subset.qwen32B.wd1e-2.QALIFT.offset4.COT.long.jsonl \
     --subprocess_args \
     --overwrite False \
     --num_syn_qa 0 \
@@ -25,22 +25,22 @@ python scripts/mp_wrapper.py \
     --model_max_length 32000 \
     --block_size 256 \
     --len_segment 31 \
-    --len_offset 8 \
+    --len_offset 4 \
     --use_gated_memory True \
     --load_in_4bit True \
     --use_icl False \
     --use_lora False \
-    --use_cot False \
+    --use_cot True \
     --gather_batches False \
     --involve_qa_epochs 0 \
-    --num_train_epochs 15 \
+    --num_train_epochs 20 \
     --remove_unused_columns True \
     --report_to none \
     --output_dir models/temp \
     --overwrite_output_dir True \
     --per_device_train_batch_size 1 \
     --learning_rate 1e-3 \
-    --weight_decay 10 \
+    --weight_decay 1e-2 \
     --adam_beta1 0.9 \
     --adam_beta2 0.98 \
     --adam_epsilon 1e-8 \

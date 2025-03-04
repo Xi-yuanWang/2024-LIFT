@@ -54,7 +54,7 @@ class ICLContextDataset(Dataset):
 
         # Generate datapoints
         mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
-        LIFT_ICL_PROMPT = f"<|im_start|>user\nPlease remember an article and use it to answer a question later. One long segment in the article <<{title}>> is ..."
+        LIFT_ICL_PROMPT = f"<|im_start|>user\nPlease remember an article and use it to answer a question later. One long segment in the article <<{title}>> is ..." # f"<|im_start|>user\nPlease recite randomly one long segment in the article <<{title}>>.<|im_end|>\n<|im_start|>assistant\nThe segment is ..." # f"One long segment in the article <<{title}>> is ..." #f"<|im_start|>user\nPlease remember an article and use it to answer a question later. One long segment in the article <<{title}>> is ..."
         prompt = self.tokenizer(LIFT_ICL_PROMPT, add_special_tokens=False)['input_ids']
 
         self.data = []
@@ -143,23 +143,7 @@ class ICLContextDataset(Dataset):
 
 
 LOOGLEFORMAT_NON_ICL = "<|im_start|>user\nBased on the article <<{title}>>, please answer the following question concisely and accurately: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
-LOOGLEFORMAT = "The article {title}: \n{input}\nPlease answer the question based on {title}.\nQuestion: {question}\nAnswer: "
-LOOGLEFORMAT_COT = """The article {title}:
-{input}
-Please recall one or several original sentences from article {title} as evidence, and then answer the question solely based on this evidence.
-Please answer in the following format:
-
-# Evidence:
-[evidence]
-# Answer:
-[answer]
-# End of answer
-
-Please DON'T output quotes when outputing evidences.
-# Question:
-{question}
-# Evidence:
-"""
+LOOGLEFORMAT_COT = "<|im_start|>user\nBased on the article <<{title}>> and the following question, please first recall original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nEvidence: "
 
 
 @dataclass
@@ -259,14 +243,10 @@ class LooGLEDataset(ICLContextDataset):
         else:
             logging.warning("Fail to generate a QA pair, skip.")
             return None
-        if not use_icl:
-            input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=question)
+        if not use_cot:
+            input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=qa_pair['Q'])
         else:
-            if use_cot:
-                input_text = LOOGLEFORMAT_COT.format(title=title, input=full_context, question=question)
-                answer = evidence + "\n# Answer:\n" + answer + "\n# End of answer"
-            else:
-                input_text = LOOGLEFORMAT.format(title=title, input=full_context, question=question)
+            input_text = LOOGLEFORMAT_COT.format(title=title, question=qa_pair['Q'])
         example = input_text + ' ' + answer# + self.tokenizer.eos_token
         print(f'syn input text: {example}')
         input_ids = self.tokenizer(example, add_special_tokens=False)['input_ids']
@@ -322,15 +302,11 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
         model = LooGLEtrain(context, title, tokenizer, training_args=training_args, num_syn_qa=num_syn_qa, title_option=title_option, generator_name_or_path=generator_name_or_path, use_cot=use_cot, use_icl=use_icl, **lift_args)
         model.eval()
         for qa_pair in tqdm.tqdm(qa_pairs, desc="QA Pair"):
-
-            if not use_icl:
+            
+            if not use_cot:
                 input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=qa_pair['Q'])
             else:
-                if use_cot:
-                    input_text = LOOGLEFORMAT_COT.format(title=title, input=context, question=qa_pair['Q'])
-                else:
-                    input_text = LOOGLEFORMAT.format(title=title, input=context, question=qa_pair['Q'])
-
+                input_text = LOOGLEFORMAT_COT.format(title=title, question=qa_pair['Q'])
             print(f'input_text: {input_text}')
             input_ids = tokenizer(input_text, add_special_tokens=False)['input_ids']#[:-1]
             print(tokenizer.decode(input_ids, skip_special_tokens=False))
@@ -345,7 +321,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
                 attention_mask=attention_mask,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
-                max_new_tokens=200,
+                max_new_tokens=1024,
                 use_cache=True,
                 do_sample=False,
             )
@@ -372,8 +348,6 @@ def main():
     num_test = test_args.pop('num_test')
     use_icl = test_args.pop('use_icl')
 
-    if not use_icl:
-        assert test_args['use_cot'] is False, "CoT is not supported in non-ICL mode."
 
     num_resumed = 0
     if os.path.exists(output_file):
