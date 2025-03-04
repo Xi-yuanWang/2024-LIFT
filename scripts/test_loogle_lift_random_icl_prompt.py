@@ -7,7 +7,7 @@ from transformers import (
     PreTrainedTokenizer,
     AutoModelForCausalLM,
     PreTrainedModel,
-    BitsAndBytesConfig
+    BitsAndBytesConfig,
 )
 from lift.args import (
     ModelArguments,
@@ -30,17 +30,11 @@ import tqdm
 
 
 LOOGLE_CHAT = "The article {title}: \n{input}\nPlease answer the question based on {title}.\nQuestion: {question}\nAnswer: "
-LOOGLE_NON_CHAT = """Below is an instruction that describes a task, paired with an input that provides further context.
-Write a response that appropriately completes the request.
+LOOGLE_NON_CHAT = {
+    'pre-inst': "Below is an instruction that describes a task, paired with an input that provides further context.\nWrite a response that appropriately completes the request.\n\n### Instruction:\nYou are given an article {title}. Please answer the question based on {title}. Question: {question}.\n\n### Input:\n{input}\n\n### Response:\n",
+    'post-inst': "Below is an input that provides part of the article {title}, paired with an instruction that describes a task.\nWrite a response that appropriately completes the request.\n\n### Input:\n{input}\n### End of Input\n\n### Instruction:\nPlease answer the question based on {title}. Question: {question}.\n### End of Instruction\n\n### Response:\n"
+}
 
-### Instruction:
-You are given an article {title}. Please answer the question based on {title}. Question: {question}.
-
-### Input:
-{input}
-
-### Response:
-"""
 
 
 @dataclass
@@ -73,6 +67,15 @@ class TestArguments:
         default=False,
         metadata={'help': "Apply chat template to the auxiliary tasks and LooGLE test tasks."}
     )
+    post_instruction: bool = field(
+        default=False,
+        metadata={'help': "Use post-instruction. By default, we use pre-instruction."}
+    )
+
+    def __post_init__(self):
+        if self.post_instruction and self.use_chat_template:
+            self.post_instruction = False
+            logging.warning("Post-instruction is only available in non-chat setting. Setting post_instruction to False.")
 
 
 class LooGLEDataset(ContextDataset):
@@ -88,6 +91,7 @@ class LooGLEDataset(ContextDataset):
         num_syn_qa: int = 0,
         generator_name_or_path: Optional[str] = None,
         use_chat_template: bool = False,
+        post_instruction: bool = False,
     ):
         context = title + '\n' + context
         super().__init__(context, tokenizer, model_max_length, block_size, len_segment, len_offset)
@@ -119,6 +123,7 @@ class LooGLEDataset(ContextDataset):
                     title=title,
                     model_max_length=model_max_length,
                     use_chat_template=use_chat_template,
+                    post_instruction=post_instruction,
                 )
                 if result is not None:
                     self.qa_data.append(result)
@@ -134,6 +139,7 @@ class LooGLEDataset(ContextDataset):
         title: str,
         model_max_length: int = 7800,
         use_chat_template: bool = False,
+        post_instruction: bool = False,
     ):
         st_pos = randint(0, len(context_sent) - 16)
         context = ' '.join(context_sent[st_pos:st_pos+16])
@@ -183,8 +189,9 @@ class LooGLEDataset(ContextDataset):
             input_ids = self.tokenizer.apply_chat_template(messages, add_generation_prompt=False)
             input_length = len(self.tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True))
         else:
-            instruction_text = LOOGLE_NON_CHAT.format(title=title, input=full_context, question=question)
-            input_text = instruction_text + answer
+            template = LOOGLE_NON_CHAT['post-inst' if post_instruction else 'pre-inst']
+            instruction_text = template.format(title=title, input=full_context, question=question)
+            input_text = instruction_text + answer + "\n### End of Response"
             input_ids = [self.tokenizer.bos_token_id] + self.tokenizer(input_text, add_special_tokens=False)['input_ids'] + [self.tokenizer.eos_token_id]
             input_length = len(self.tokenizer(instruction_text, add_special_tokens=False)['input_ids']) + 1
 
@@ -215,6 +222,7 @@ def LooGLEtrain(
     num_syn_qa: int = 0,
     generator_name_or_path: Optional[str] = None,
     use_chat_template: bool = False,
+    post_instruction: bool = False,
     training_args: TrainingArguments = None,
     model_name_or_path: str = None,
     model_max_length: int = 7800,
@@ -253,7 +261,8 @@ def LooGLEtrain(
         len_offset=len_offset,
         num_syn_qa=num_syn_qa,
         generator_name_or_path=generator_name_or_path,
-        use_chat_template=use_chat_template
+        use_chat_template=use_chat_template,
+        post_instruction=post_instruction,
     )
     if use_lora or use_gated_memory or use_prefix_tuning:
         model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
@@ -268,7 +277,8 @@ def prediction(
     num_resumed: int = 0,
     num_syn_qa: int = 0,
     generator_name_or_path: Optional[str] = None,
-    use_chat_template: bool = False
+    use_chat_template: bool = False,
+    post_instruction: bool = False,
 ):
     tokenizer = load_tokenizer(lift_args['tokenizer_name_or_path'])
     mixin = tokenizer("...", add_special_tokens=False)['input_ids']
@@ -287,6 +297,7 @@ def prediction(
             num_syn_qa=num_syn_qa,
             generator_name_or_path=generator_name_or_path,
             use_chat_template=use_chat_template,
+            post_instruction=post_instruction,
             training_args=training_args,
             **lift_args,
         )
@@ -299,7 +310,8 @@ def prediction(
                 ]
                 input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
             else:
-                input_text = LOOGLE_NON_CHAT.format(title=title, input=context, question=qa_pair['Q'])
+                template = LOOGLE_NON_CHAT['post-inst' if post_instruction else 'pre-inst']
+                input_text = template.format(title=title, input=context, question=qa_pair['Q'])
                 input_ids = [tokenizer.bos_token_id] + tokenizer(input_text, add_special_tokens=False)['input_ids']
 
             if len(input_ids) > model_max_length:
@@ -313,9 +325,11 @@ def prediction(
                 eos_token_id=tokenizer.eos_token_id,
                 max_new_tokens=200,
                 use_cache=True,
-                do_sample=False,
+                # do_sample=False,
             )
             response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=True)
+            if "### End of Response" in response:
+                response = response[:response.find("### End of Response")]
             qa_pair['pred'] = response
         output_case = {
             'title': title,
