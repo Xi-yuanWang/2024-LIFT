@@ -92,7 +92,7 @@ class GMQwen2Attention(Qwen2Attention):
             **kwargs,
         )
 
-        attn_output = attn_output + (memgate * mem).transpose(1, 2)
+        attn_output = attn_output + ((memgate * attention_mask.unsqueeze(1).unsqueeze(-1)) * mem).transpose(1, 2)
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
@@ -201,6 +201,7 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
 
         # Initialize weights and apply final processing
         self.post_init()
+        assert self.config._attn_implementation == "sdpa"
 
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -254,9 +255,10 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
-        causal_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
-        )
+        causal_mask = None
+        #self._update_causal_mask(
+        #    attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        #)
 
         hidden_states = inputs_embeds
 
@@ -273,23 +275,24 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            if self.gradient_checkpointing and self.training:
-                layer_outputs = self._gradient_checkpointing_func(
-                    decoder_layer.__call__,
-                    hidden_states,
-                    causal_mask,
-                    position_ids,
-                    past_key_values,
-                    output_attentions,
-                    use_cache,
-                    cache_position,
-                    position_embeddings,
-                )
-            else:
-                if self.layer_start_idx<= layer_idx <self.config.num_hidden_layers-self.layer_end_idx:
+            if output_memgate and (self.layer_start_idx<= layer_idx <self.config.num_hidden_layers-self.layer_end_idx):
+                if self.gradient_checkpointing and self.training:
+                    layer_outputs = self._gradient_checkpointing_func(
+                        decoder_layer.__call__,
+                        hidden_states,
+                        attention_mask,
+                        position_ids,
+                        past_key_values,
+                        output_attentions,
+                        use_cache,
+                        cache_position,
+                        position_embeddings,
+                        True
+                    )
+                else:
                     layer_outputs = decoder_layer(
                         hidden_states,
-                        attention_mask=causal_mask,
+                        attention_mask=attention_mask,
                         position_ids=position_ids,
                         past_key_value=past_key_values,
                         output_attentions=output_attentions,
@@ -299,8 +302,21 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
                         output_memgate=True,
                         **flash_attn_kwargs,
                     )
-                    memgates.append(layer_outputs[-1])
-                    layer_outputs = layer_outputs[:-1]
+                memgates.append(layer_outputs[-1])
+                layer_outputs = layer_outputs[:-1]
+            else:
+                if self.gradient_checkpointing and self.training:
+                    layer_outputs = self._gradient_checkpointing_func(
+                        decoder_layer.__call__,
+                        hidden_states,
+                        causal_mask,
+                        position_ids,
+                        past_key_values,
+                        output_attentions,
+                        use_cache,
+                        cache_position,
+                        position_embeddings,
+                    )   
                 else:
                     layer_outputs = decoder_layer(
                         hidden_states,

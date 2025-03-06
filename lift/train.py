@@ -34,6 +34,7 @@ def my_collator(features: List[Dict[str, torch.Tensor]], return_tensors="pt") ->
         ret = {}
         ret["labels"] = torch.nn.utils.rnn.pad_sequence([_["labels"] for _ in features], batch_first=True, padding_value=-100, padding_side='right')
         ret["input_ids"] = torch.nn.utils.rnn.pad_sequence([_["input_ids"] for _ in features], batch_first=True, padding_value=0, padding_side='right')
+        ret["attention_mask"] = torch.nn.utils.rnn.pad_sequence([_["attention_mask"] for _ in features], batch_first=True, padding_value=1, padding_side='right')
         # print(ret)
         return ret
     else:

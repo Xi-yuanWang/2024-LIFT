@@ -29,7 +29,18 @@ import torch
 import tqdm
 from torch.utils.data import Dataset
 from copy import deepcopy
+from gensim.parsing import remove_stopwords
+import string
 
+
+PUNC_TRANS = str.maketrans(string.punctuation, ' '*len(string.punctuation))
+def remove_punctuation(text: str):
+    no_punct = text.replace("'s", " ").translate(PUNC_TRANS)
+    return no_punct
+
+LIFT_ICL_PROMPT = "<|im_start|>user\nBased on the article <<{title}>>, please recite the most relevant original sentence from article of the following keywords: {keywords}<|im_end|>\n<|im_start|>assistant\nSentence: "
+LOOGLEFORMAT_NON_ICL = "<|im_start|>user\nBased on the article <<{title}>>, please answer the following question concisely and accurately.\nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
+LOOGLEFORMAT_COT = "<|im_start|>user\nBased on the article <<{title}>>, please recite the most relevant original sentence from article of the following question: {question}<|im_end|>\n<|im_start|>assistant\nSentence: "
 
 class ICLContextDataset(Dataset):
     """Given a piece of context, `ContextDataset` creates a torch-Dataset, using the truncation strategy described in our paper.
@@ -51,34 +62,13 @@ class ICLContextDataset(Dataset):
         sents = sent_tokenize(texts)
 
         self.data = []
-
-        LIFT_ICL_PROMPT = "<|im_start|>user\nBased on the article <<{title}>>, please recite the next original sentence from article of the following sentence: {headsent}<|im_end|>\n<|im_start|>assistant\nSentence:" 
-        for s in range(-int(0.5*len_segment), len(sents) - int(0.5*len_segment), 1):
-            start_pos = max(s, 1)
-            end_pos = min(start_pos + len_segment, len(sents))
-            prompt = LIFT_ICL_PROMPT.format(idx=start_pos, title=title, headsent=sents[start_pos-1])
-
-            text = " ".join(sents[start_pos:end_pos]) + "<|im_end|>"
-            
-            prompt  = self.tokenizer(prompt, add_special_tokens=False)['input_ids']
-            text = self.tokenizer(text, add_special_tokens=False)['input_ids']           
-
-            self.data.append((prompt+text, len(prompt)))
-
-            #tmp = lift_icl + lift
-        # self.num_segments = len(self.data)  # record the number of context datapoints
-        
-        # return
-
-        LIFT_ICL_PROMPT = "<|im_start|>user\nBased on the article <<{title}>>, please recite the previous original sentence from article of the following sentence: {headsent}<|im_end|>\n<|im_start|>assistant\nSentence:" # f"One long seg    ment     in the article <<{title}>> is ..." #f"<|im_start|>user\nPlease remember an article and use it to answer a que    stion la    ter. One long segment in the article <<{title}>> is ..."
-        for s in range(-int(0.5*len_segment), len(sents) - int(0.5*len_segment), 1):
-            start_pos = max(s, 0)
-            end_pos = min(start_pos + len_segment, len(sents)-1)
-            prompt = LIFT_ICL_PROMPT.format(idx=start_pos, title=title, headsent=sents[end_pos])
-            text = " ".join(sents[start_pos:end_pos]) + "<|im_end|>"
-            prompt  = self.tokenizer(prompt, add_special_tokens=False)['input_ids']
-            text = self.tokenizer(text, add_special_tokens=False)['input_ids']
-            self.data.append((prompt+text, len(prompt)))
+        for s in range(len(sents)):
+            if len(sents[s].split()) < 5:
+                continue
+            prompt = LIFT_ICL_PROMPT.format(title=title)  
+            keywords = list(remove_stopwords(remove_punctuation(sents)).split())
+            text = self.tokenizer(sents[s].strip() + "<|im_end|>", add_special_tokens=False)['input_ids']
+            self.data.append((prompt, keywords, text))
 
     def __len__(self):
         return len(self.data)#self.num_segments
@@ -114,22 +104,22 @@ class ICLContextDataset(Dataset):
         input_ids = torch.tensor(input_ids, dtype=torch.long)
         labels = torch.tensor(labels, dtype=torch.long)
         labels[:len_input] = self.ignore_index  # mask the unsupervised part
-        #attention_mask = torch.ones_like(input_ids)
+        attention_mask = torch.ones_like(input_ids)
+        attention_mask[:len_input-1] = 0
         return {
             'input_ids': input_ids,
             'labels': labels,
-            #'attention_mask': attention_mask,
+            'attention_mask': attention_mask,
         }
     
     def __getitem__(self, index):
         #print(index)
         if len(self.data[index]) > 2:
-            lift_icl, start_pos, end_pos, var, input_len = self.data[index]
+            prompt, keywords, text_id = self.data[index]
             import random 
-            offset = random.randint(-var, var)
-            def constrainidx(a):
-                return min(max(a, 0), len(self.input_ids))
-            ret = self.preprocessing((lift_icl+self.input_ids[constrainidx(start_pos+offset): constrainidx(end_pos+offset)], input_len))
+            prompt = prompt.format(keywords=" ,".join(random.sample(keywords, k=random.randint(1, len(keywords))))+".")
+            prompt = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+            ret = self.preprocessing((prompt + text_id, len(prompt)))
         else:
             ret = self.preprocessing(self.data[index])
         print(self.tokenizer.decode(ret["input_ids"], skip_special_tokens=False), flush=True)
@@ -146,8 +136,6 @@ class ICLContextDataset(Dataset):
         raise NotImplementedError
 
 
-LOOGLEFORMAT_NON_ICL = "<|im_start|>user\nBased on the article <<{title}>>, please answer the following question concisely and accurately.\nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
-LOOGLEFORMAT_COT = "<|im_start|>user\nBased on the article <<{title}>>, please recite the most relevant original sentence from article of the following question: {question}<|im_end|>\n<|im_start|>assistant\nSentence:"
 
 #"<|im_start|>user\nBased on the article <<{title}>>, please answer the following question.\nQuestion: {question}.\nLet's think step by step. First, please recite the most relevant three original sentences from the article <<{title}>> as evidence, and then provide an concise answer based on the sentences.<|im_end|>\n<|im_start|>assistant\n"
 
@@ -183,7 +171,6 @@ class LooGLEDataset(ICLContextDataset):
         if num_syn_qa > 0:
             self.qadata = []
             context_sent = sent_tokenize(context)
-            assert len(context_sent) >= 16, "The length of the context should be at least 25 sentences."
             generator = AutoModelForCausalLM.from_pretrained(
                 generator_name_or_path,
                 device_map='auto',
@@ -199,6 +186,8 @@ class LooGLEDataset(ICLContextDataset):
             gen_tokenizer = load_tokenizer(generator_name_or_path)
             generator.eval()
             for _ in range(len(context_sent)):
+                if len(context_sent[_].split()) < 5:
+                    continue
                 result = self.generate_task(generator, gen_tokenizer, context, context_sent[_:_+1], title, model_max_length, use_cot, use_icl=use_icl)
                 if result is not None:
                     self.qadata.append(result)
@@ -249,10 +238,9 @@ class LooGLEDataset(ICLContextDataset):
         example = input_text# + ' ' + answer# + self.tokenizer.eos_token
         # print(f'syn input text: {example}', flush=True)
         input_ids = self.tokenizer(example, add_special_tokens=False)['input_ids']
-        input_ids = input_ids + self.tokenizer(' '+answer, add_special_tokens=False)['input_ids']
+        input_ids = input_ids + self.tokenizer(answer, add_special_tokens=False)['input_ids']
         input_ids = input_ids + [self.tokenizer.eos_token_id]
         input_length = len(self.tokenizer(input_text, add_special_tokens=False)['input_ids'])
-        mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
         output_length = len(input_ids) - input_length
         if len(input_ids) > model_max_length:
             raise NotImplementedError
@@ -282,7 +270,6 @@ def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_
 
 def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Dict, output_file: str, num_resumed: int=0, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_cot: bool=False, use_icl: bool=True):
     tokenizer = load_tokenizer(lift_args['tokenizer_name_or_path'])
-    mixin = tokenizer("...", add_special_tokens=False)['input_ids']
     model_max_length = lift_args['model_max_length']
     
     for i, sample in enumerate(tqdm.tqdm(data, desc="Sample")):
@@ -315,6 +302,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
                 input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
             input_ids = torch.tensor(input_ids, dtype=torch.long, device=model.device).unsqueeze(0)
             attention_mask = torch.ones_like(input_ids)
+            attention_mask[:-1] = 0
             #terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
             output = model.generate(
                 input_ids=input_ids,
