@@ -24,4 +24,4 @@ def preprocess(model_name_or_path: str, output_dir: str):
     tokenizer.save_pretrained(output_dir)
 
 if __name__ == "__main__":
-    preprocess("/ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct", "models/LinGated-Memory-Qwen2.5-32B-Instruct")
+    preprocess("/ceph/home/muhan01/huggingfacemodels/Qwen2.5-14B-Instruct", "models/LinGated-Memory-Qwen2.5-14B-Instruct")

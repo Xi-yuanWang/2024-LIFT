@@ -115,12 +115,15 @@ def retrieve_batch(client: OpenAI, batch_id, file_id, loogle_file, result_file):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--action', required=True, choices=['submit', 'list', 'retrieve'])
-    parser.add_argument('--loogle_file', help="LooGLE output file.")
+    parser.add_argument('--file', help="LooGLE output file.")
     parser.add_argument('--batch_id', help="The batch ID of a previous request.")
     parser.add_argument('--file_id', help="The output file ID.")
-    parser.add_argument('--result_file', help="The result GPT_SCORE file.")
     parser.add_argument('--metadata_kwargs', nargs='*', help="The following are metadata kwargs.")
     args = parser.parse_args()
+    
+    args.loogle_file = args.file
+    args.result_file = args.loogle_file.replace("outputs", "parsed")
+
     metadata = parse_metadata(args.metadata_kwargs)
 
     with open("api_key.txt", "r") as f:

@@ -48,32 +48,37 @@ class ICLContextDataset(Dataset):
         self.tokenizer = tokenizer
         self.model_max_length = model_max_length
         texts = context.replace('\0', ' ')
-        input_ids = self.tokenizer(texts, add_special_tokens=False)['input_ids']
-        len_segment = len_segment * block_size
-        len_offset = len_offset * block_size
-
-        # Generate datapoints
-        mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
-        LIFT_ICL_PROMPT = f"<|im_start|>user\nPlease remember an article and use it to answer a question later. One long segment in the article <<{title}>> is ..." # f"<|im_start|>user\nPlease recite randomly one long segment in the article <<{title}>>.<|im_end|>\n<|im_start|>assistant\nThe segment is ..." # f"One long segment in the article <<{title}>> is ..." #f"<|im_start|>user\nPlease remember an article and use it to answer a question later. One long segment in the article <<{title}>> is ..."
-        prompt = self.tokenizer(LIFT_ICL_PROMPT, add_special_tokens=False)['input_ids']
+        sents = sent_tokenize(texts)
 
         self.data = []
-        for s in range(0, len(input_ids) - int(0.5*len_offset), len_offset):
-            start_pos = s
-            end_pos = min(s + len_segment, len(input_ids))
-            #lift_icl_front, lift_icl_back = self.prepare_lift_icl(start_pos, end_pos, input_ids, len_segment, len_offset)
-            #lift_icl = lift_icl_front + mixin + lift_icl_back
 
-            lift_icl = prompt 
+        LIFT_ICL_PROMPT = "<|im_start|>user\nBased on the article <<{title}>>, please recite the next original sentence from article of the following sentence: {headsent}<|im_end|>\n<|im_start|>assistant\nSentence:" 
+        for s in range(-int(0.5*len_segment), len(sents) - int(0.5*len_segment), 1):
+            start_pos = max(s, 1)
+            end_pos = min(start_pos + len_segment, len(sents))
+            prompt = LIFT_ICL_PROMPT.format(idx=start_pos, title=title, headsent=sents[start_pos-1])
+
+            text = " ".join(sents[start_pos:end_pos]) + "<|im_end|>"
             
-            input_len = len(lift_icl)
-            #lift = input_ids[start_pos: end_pos]
+            prompt  = self.tokenizer(prompt, add_special_tokens=False)['input_ids']
+            text = self.tokenizer(text, add_special_tokens=False)['input_ids']           
 
-            self.data.append((lift_icl, start_pos, end_pos, int(0.5*(len_offset)), input_len))
+            self.data.append((prompt+text, len(prompt)))
 
             #tmp = lift_icl + lift
-        self.input_ids = input_ids
-        #self.num_segments = len(self.data)  # record the number of context datapoints
+        # self.num_segments = len(self.data)  # record the number of context datapoints
+        
+        # return
+
+        LIFT_ICL_PROMPT = "<|im_start|>user\nBased on the article <<{title}>>, please recite the previous original sentence from article of the following sentence: {headsent}<|im_end|>\n<|im_start|>assistant\nSentence:" # f"One long seg    ment     in the article <<{title}>> is ..." #f"<|im_start|>user\nPlease remember an article and use it to answer a que    stion la    ter. One long segment in the article <<{title}>> is ..."
+        for s in range(-int(0.5*len_segment), len(sents) - int(0.5*len_segment), 1):
+            start_pos = max(s, 0)
+            end_pos = min(start_pos + len_segment, len(sents)-1)
+            prompt = LIFT_ICL_PROMPT.format(idx=start_pos, title=title, headsent=sents[end_pos])
+            text = " ".join(sents[start_pos:end_pos]) + "<|im_end|>"
+            prompt  = self.tokenizer(prompt, add_special_tokens=False)['input_ids']
+            text = self.tokenizer(text, add_special_tokens=False)['input_ids']
+            self.data.append((prompt+text, len(prompt)))
 
     def __len__(self):
         return len(self.data)#self.num_segments
@@ -86,7 +91,6 @@ class ICLContextDataset(Dataset):
                 satisfying frist segment length is less than 'front_lim', 
                 second segment length is less than 'back_lim'
                 and the sum of two segments' length is equal to 'tot_len'.
-
 
                 The return value is the length of the two segments.
             """
@@ -110,11 +114,11 @@ class ICLContextDataset(Dataset):
         input_ids = torch.tensor(input_ids, dtype=torch.long)
         labels = torch.tensor(labels, dtype=torch.long)
         labels[:len_input] = self.ignore_index  # mask the unsupervised part
-        attention_mask = torch.ones_like(input_ids)
+        #attention_mask = torch.ones_like(input_ids)
         return {
             'input_ids': input_ids,
             'labels': labels,
-            'attention_mask': attention_mask,
+            #'attention_mask': attention_mask,
         }
     
     def __getitem__(self, index):
@@ -128,8 +132,8 @@ class ICLContextDataset(Dataset):
             ret = self.preprocessing((lift_icl+self.input_ids[constrainidx(start_pos+offset): constrainidx(end_pos+offset)], input_len))
         else:
             ret = self.preprocessing(self.data[index])
-        #print(self.tokenizer.decode(ret["input_ids"], skip_special_tokens=False))
-        #print(self.tokenizer.decode(ret["labels"][ret["labels"]>=0], skip_special_tokens=False))
+        print(self.tokenizer.decode(ret["input_ids"], skip_special_tokens=False), flush=True)
+        print(self.tokenizer.decode(ret["labels"][ret["labels"]>=0], skip_special_tokens=False), flush=True)
         return ret
     
     def enable_qa(self):
@@ -142,9 +146,10 @@ class ICLContextDataset(Dataset):
         raise NotImplementedError
 
 
-LOOGLEFORMAT_NON_ICL = "<|im_start|>user\nBased on the article <<{title}>>, please answer the following question concisely and accurately: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
-LOOGLEFORMAT_COT = "<|im_start|>user\nBased on the article <<{title}>> and the following question, please first recall original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nEvidence: "
+LOOGLEFORMAT_NON_ICL = "<|im_start|>user\nBased on the article <<{title}>>, please answer the following question concisely and accurately.\nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
+LOOGLEFORMAT_COT = "<|im_start|>user\nBased on the article <<{title}>>, please recite the most relevant original sentence from article of the following question: {question}<|im_end|>\n<|im_start|>assistant\nSentence:"
 
+#"<|im_start|>user\nBased on the article <<{title}>>, please answer the following question.\nQuestion: {question}.\nLet's think step by step. First, please recite the most relevant three original sentences from the article <<{title}>> as evidence, and then provide an concise answer based on the sentences.<|im_end|>\n<|im_start|>assistant\n"
 
 @dataclass
 class TestArguments:
@@ -163,7 +168,7 @@ class LooGLEDataset(ICLContextDataset):
     def __init__(self, context: str, title: str, tokenizer: PreTrainedTokenizer, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_cot: bool=False, use_icl: bool=True):
         # Option 1: prepend title before context
         if title_option == 1:
-            context = "Title: " + title + '\n' + context
+            context = "Title: " + title + '.\n' + context
         super().__init__(title, context, tokenizer, model_max_length, block_size, len_segment, len_offset)
         # Option 2: prepend title before each segment and predict the whole segment
         if title_option == 2:
@@ -193,24 +198,23 @@ class LooGLEDataset(ICLContextDataset):
             )
             gen_tokenizer = load_tokenizer(generator_name_or_path)
             generator.eval()
-            for _ in range(num_syn_qa):
-                result = self.generate_task(generator, gen_tokenizer, context, context_sent, title, model_max_length, use_cot, use_icl=use_icl)
+            for _ in range(len(context_sent)):
+                result = self.generate_task(generator, gen_tokenizer, context, context_sent[_:_+1], title, model_max_length, use_cot, use_icl=use_icl)
                 if result is not None:
                     self.qadata.append(result)
         self.enable_qa_tag = False
-    
+
     @torch.no_grad()
     def generate_task(self, generator: PreTrainedModel, tokenizer: PreTrainedTokenizer, full_context: str, context_sent: List[str], title: str, model_max_length: int, use_cot: bool=False, use_icl: bool=True):
-        st_pos = randint(0, len(context_sent) - 8)
-        context = ' '.join(context_sent[st_pos:st_pos+8])
+        context = ' '.join(context_sent)
         messages = [
             {
                 'role': "system",
                 'content': "You are a helpful assistant."
             },
             {
-                'role': "user", 
-                'content': f"You are given a piece of text as the context. You should generate ONLY one question and the corresponding concise answer according to the context. You should also select one or more sentences directly from the original context as the evidence. The evidences must be verbatim sentences from the context. Please answer in the following format: \nQuestion: [question] \nAnswer: [answer] \nEvidence: [evidence]\nPlease DON'T output quotes when outputting evidences. The following is the piece of text: {context}"
+                'role': "user",
+                'content': f"{context}\nGiven the sentence in article <<{title}>> above, please generate a question, whose answer is in the sentence, in the following format: \nQuestion: [question]. Please do not generate other text."
             }
         ]
         input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(generator.device)
@@ -229,36 +233,31 @@ class LooGLEDataset(ICLContextDataset):
             )
             response = tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
             question_position = response.find("Question:")
-            answer_position = response.find("Answer:")
-            evidence_position = response.find("Evidence:")
-            
-            if question_position == -1 or answer_position == -1 or evidence_position == -1:
+
+            if question_position == -1:
                 continue
-            question = response[question_position + 9:answer_position].strip()
-            answer = response[answer_position + 7:evidence_position].strip()
-            evidence = response[evidence_position + 9:].strip()
-            if evidence not in context:
-                pass #continue
+            question = response[question_position + 9:].strip().split("Note:")[0].strip()
             break
         else:
             logging.warning("Fail to generate a QA pair, skip.")
             return None
         if not use_cot:
-            input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=qa_pair['Q'])
+            input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=question)
         else:
-            input_text = LOOGLEFORMAT_COT.format(title=title, question=qa_pair['Q'])
+            input_text = LOOGLEFORMAT_COT.format(title=title, question=question)
+        answer = context
         example = input_text + ' ' + answer# + self.tokenizer.eos_token
-        print(f'syn input text: {example}')
+        print(f'syn input text: {example}', flush=True)
         input_ids = self.tokenizer(example, add_special_tokens=False)['input_ids']
         input_ids = input_ids + [self.tokenizer.eos_token_id]
-        input_length = len(self.tokenizer(input_text, add_special_tokens=False)['input_ids']) 
+        input_length = len(self.tokenizer(input_text, add_special_tokens=False)['input_ids'])
         mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
         output_length = len(input_ids) - input_length
         if len(input_ids) > model_max_length:
             raise NotImplementedError
             input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
             input_length = len(input_ids) - output_length
-        return (input_ids, input_length)
+        return (input_ids, input_length) 
     
     def enable_qa(self):
         self.enable_qa_tag = True
@@ -325,7 +324,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
                 use_cache=True,
                 do_sample=False,
             )
-            response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=True)
+            response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=False)
             qa_pair['pred'] = response
         output_case = {
             'title': title,

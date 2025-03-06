@@ -12,35 +12,35 @@ source utils.sh
 prepare
 
 python scripts/mp_wrapper.py \
-    --script scripts/test_loogle_lift_random_icl_prompt.py \
+    --script scripts/test_loogle_lift_sentencesplit.py \
     --num_process 1 \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.qwen32B.wd1e-2.QALIFT.offset4.COT.long.jsonl \
+    --output_file outputs/subset.ss.allQA3.jsonl \
     --subprocess_args \
+    --output_dir models/qwentrain.ss3.tmp \
     --overwrite False \
-    --num_syn_qa 0 \
+    --num_syn_qa 1 \
     --title_option 1 \
     --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
-    --model_name_or_path models/LinGated-Memory-Qwen2.5-32B-Instruct \
+    --model_name_or_path models/LinGated-Memory-Qwen2.5-32B-Instruct/ \
     --model_max_length 32000 \
     --block_size 256 \
-    --len_segment 31 \
-    --len_offset 4 \
+    --len_segment 1 \
+    --len_offset 8 \
     --use_gated_memory True \
     --load_in_4bit True \
     --use_icl False \
     --use_lora False \
+    --lora_rank 32 \
     --use_cot True \
     --gather_batches False \
-    --involve_qa_epochs 0 \
-    --num_train_epochs 20 \
+    --involve_qa_epochs 30 \
+    --num_train_epochs 0 \
     --remove_unused_columns True \
     --report_to none \
-    --output_dir models/temp \
-    --overwrite_output_dir True \
-    --per_device_train_batch_size 1 \
-    --learning_rate 1e-3 \
-    --weight_decay 1e-2 \
+    --per_device_train_batch_size 32 \
+    --learning_rate 3e-3 \
+    --weight_decay 1e-3 \
     --adam_beta1 0.9 \
     --adam_beta2 0.98 \
     --adam_epsilon 1e-8 \
