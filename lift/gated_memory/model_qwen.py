@@ -96,7 +96,7 @@ class GMQwen2Attention(Qwen2Attention):
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
-        return attn_output, attn_weights
+        return attn_output, attn_weights, memgate
 
 
 class GMQwen2DecoderLayer(Qwen2DecoderLayer):
@@ -114,6 +114,7 @@ class GMQwen2DecoderLayer(Qwen2DecoderLayer):
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
+        output_memgate: Optional[bool] = False,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
@@ -121,7 +122,7 @@ class GMQwen2DecoderLayer(Qwen2DecoderLayer):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, self_attn_weights = self.self_attn(
+        hidden_states, self_attn_weights, memgate = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -143,7 +144,8 @@ class GMQwen2DecoderLayer(Qwen2DecoderLayer):
         outputs = (hidden_states,)
         if output_attentions:
             outputs += (self_attn_weights,)
-
+        if output_memgate:
+            outputs += (memgate, )
         return outputs
 
 class GMQwen2PreTrainedModel(PreTrainedModel):
@@ -186,12 +188,12 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        start_idx = 4
-        end_idx = 4
+        self.layer_start_idx = 4
+        self.layer_end_idx = 4
         self.layers = nn.ModuleList(
-            [Qwen2DecoderLayer(config, layer_idx) for layer_idx in range(start_idx)] + [
-                GMQwen2DecoderLayer(config, layer_idx) for layer_idx in range(start_idx, config.num_hidden_layers-end_idx, 1)] + [
-                    Qwen2DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers-end_idx, config.num_hidden_layers, 1)]
+            [Qwen2DecoderLayer(config, layer_idx) for layer_idx in range(self.layer_start_idx)] + [
+                GMQwen2DecoderLayer(config, layer_idx) for layer_idx in range(self.layer_start_idx, config.num_hidden_layers-self.layer_end_idx, 1)] + [
+                    Qwen2DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers-self.layer_end_idx, config.num_hidden_layers, 1)]
         )
         self.norm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen2RotaryEmbedding(config=config)
@@ -218,6 +220,7 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        output_memgate: Optional[bool] = False,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -264,7 +267,9 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
 
-        for decoder_layer in self.layers[: self.config.num_hidden_layers]:
+        memgates = []
+
+        for layer_idx, decoder_layer in enumerate(self.layers[: self.config.num_hidden_layers]):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
@@ -281,17 +286,33 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
                     position_embeddings,
                 )
             else:
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=causal_mask,
-                    position_ids=position_ids,
-                    past_key_value=past_key_values,
-                    output_attentions=output_attentions,
-                    use_cache=use_cache,
-                    cache_position=cache_position,
-                    position_embeddings=position_embeddings,
-                    **flash_attn_kwargs,
-                )
+                if self.layer_start_idx<= layer_idx <self.config.num_hidden_layers-self.layer_end_idx:
+                    layer_outputs = decoder_layer(
+                        hidden_states,
+                        attention_mask=causal_mask,
+                        position_ids=position_ids,
+                        past_key_value=past_key_values,
+                        output_attentions=output_attentions,
+                        use_cache=use_cache,
+                        cache_position=cache_position,
+                        position_embeddings=position_embeddings,
+                        output_memgate=True,
+                        **flash_attn_kwargs,
+                    )
+                    memgates.append(layer_outputs[-1])
+                    layer_outputs = layer_outputs[:-1]
+                else:
+                    layer_outputs = decoder_layer(
+                        hidden_states,
+                        attention_mask=causal_mask,
+                        position_ids=position_ids,
+                        past_key_value=past_key_values,
+                        output_attentions=output_attentions,
+                        use_cache=use_cache,
+                        cache_position=cache_position,
+                        position_embeddings=position_embeddings,
+                        **flash_attn_kwargs,
+                    )
 
             hidden_states = layer_outputs[0]
 
@@ -310,7 +331,10 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
         )
-        return output if return_dict else output.to_tuple()
+        ret = output if return_dict else output.to_tuple()
+        if output_memgate:
+            ret = (ret, memgates)
+        return ret
 
     def _update_causal_mask(
         self,
@@ -514,6 +538,7 @@ class GMQwen2ForCausalLM(GMQwen2PreTrainedModel, GenerationMixin):
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
+        output_memgate: Optional[bool] = False,
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
@@ -566,8 +591,11 @@ class GMQwen2ForCausalLM(GMQwen2PreTrainedModel, GenerationMixin):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             cache_position=cache_position,
+            output_memgate=output_memgate,
             **kwargs,
         )
+        if output_memgate:
+            outputs, memgate = outputs
 
         hidden_states = outputs[0]
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
@@ -581,11 +609,16 @@ class GMQwen2ForCausalLM(GMQwen2PreTrainedModel, GenerationMixin):
         if not return_dict:
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
+        
+        ret = CausalLMOutputWithPast(
+                loss=loss,
+                logits=logits,
+                past_key_values=outputs.past_key_values,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions,)
 
-        return CausalLMOutputWithPast(
-            loss=loss,
-            logits=logits,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
+        
+        if output_memgate:
+            return ret, memgate
+        else:
+            return ret

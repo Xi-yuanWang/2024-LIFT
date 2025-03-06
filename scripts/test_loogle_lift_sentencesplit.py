@@ -246,9 +246,10 @@ class LooGLEDataset(ICLContextDataset):
         else:
             input_text = LOOGLEFORMAT_COT.format(title=title, question=question)
         answer = context
-        example = input_text + ' ' + answer# + self.tokenizer.eos_token
-        print(f'syn input text: {example}', flush=True)
+        example = input_text# + ' ' + answer# + self.tokenizer.eos_token
+        # print(f'syn input text: {example}', flush=True)
         input_ids = self.tokenizer(example, add_special_tokens=False)['input_ids']
+        input_ids = input_ids + self.tokenizer(' '+answer, add_special_tokens=False)['input_ids']
         input_ids = input_ids + [self.tokenizer.eos_token_id]
         input_length = len(self.tokenizer(input_text, add_special_tokens=False)['input_ids'])
         mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
