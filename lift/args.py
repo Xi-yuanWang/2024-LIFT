@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, Any, List
+from typing import Optional, Any, List, Union, Literal
 from transformers import HfArgumentParser
 
 
@@ -36,18 +36,54 @@ class DataTrainingArguments:
 
 @dataclass
 class CustomTrainingArguments:
-    use_lora: bool = field(default=False)
-    lora_rank: int = field(default=8)
-    use_pissa: bool = field(default=False)
-    use_gated_memory: bool = field(default=False, metadata={'help': "Use the gated-memory technique."})
-    use_prefix_tuning: bool = field(default=False, metadata={'help': "Use prefix-tuning."})
-    num_virtual_tokens: Optional[int] = field(default=None, metadata={'help': "The number of learnable tokens in prefix-tuning."})
-    load_in_4bit: bool = field(default=False)
-    load_in_8bit: bool = field(default=False)
-    gather_batches: bool = field(default=True)
-    involve_qa_epochs: int = field(default=0)
+    use_lora: bool = field(
+        default=False,
+        metadata={'help': "Use LoRA."}
+    )
+    lora_rank: int = field(
+        default=128,
+        metadata={'help': "The rank of LoRA adapters."}
+    )
+    lora_target_modules: List[str] = field(
+        default_factory=lambda: ['q_proj', 'k_proj', 'v_proj', 'o_proj'],
+        metadata={'help': "The target modules of LoRA adapters."}
+    )
+    use_pissa: bool = field(
+        default=False,
+        metadata={'help': "Use PiSSA intialization for LoRA. Require model_name_or_path to be a PiSSA checkpoint."}
+    )
+    use_gated_memory: bool = field(
+        default=False,
+        metadata={'help': "Use Gated Memory."}
+    )
+    use_prefix_tuning: bool = field(
+        default=False,
+        metadata={'help': "Use prefix-tuning."}
+    )
+    num_virtual_tokens: Optional[int] = field(
+        default=None,
+        metadata={'help': "The number of learnable tokens in prefix-tuning."}
+    )
+    load_in_4bit: bool = field(
+        default=False,
+        metadata={'help': "Load in 4bit."}
+    )
+    load_in_8bit: bool = field(
+        default=False,
+        metadata={'help': "Load in 8bit."}
+    )
+    gather_batches: bool = field(
+        default=True,
+        metadata={'help': "Update only once per epoch. Implemented with gradient accumulate."}
+    )
+    involve_qa_epochs: int = field(
+        default=0,
+        metadata={'help': "The number of epochs of the second LIFT stage (incorporate auxiliary tasks)."}
+    )
     
     def __post_init__(self):
+        if len(self.lora_target_modules) == 1 and self.lora_target_modules[0] == 'all-linear':
+            self.lora_target_modules = 'all-linear'
         assert not self.load_in_8bit, "8-bit loading is not supported yet."
         if self.use_pissa:
             assert self.use_lora, "LoRA must be enabled when using PiSSA."

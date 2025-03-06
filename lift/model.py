@@ -11,8 +11,7 @@ from peft import (
     PeftModel,
     PeftConfig
 )
-from typing import Optional
-from copy import deepcopy
+from typing import Optional, Union, Literal, List
 import torch
 from .gated_memory.model import GMLlamaForCausalLM
 
@@ -68,20 +67,43 @@ def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8
     return model_base
 
 
-def load_model(model_name_or_path: str, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, load_in_8bit: bool=False, vocab_size: Optional[int]=None, use_gated_memory: bool=False, use_prefix_tuning: bool=False, num_virtual_tokens: Optional[int]=None):
+def load_model(
+    model_name_or_path: str,
+    use_lora: bool = False,
+    lora_rank: Optional[int] = None,
+    lora_target_modules: Union[Literal['all-linear'], List[str]] = ['q_proj', 'k_proj', 'v_proj', 'o_proj'],
+    use_pissa: bool = False,
+    load_in_4bit: bool = False,
+    load_in_8bit: bool = False,
+    vocab_size: Optional[int] = None,
+    use_gated_memory: bool = False,
+    use_prefix_tuning: bool = False,
+    num_virtual_tokens: Optional[int] = None
+):
     """Load the trainable model.
     Args:
-        model_name_or_path (str): The name or path to the pretrained model checkpoint.
-        tokenizer (PreTrainedTokenizer): the model input will adapt to the width of the tokenizer.
-        use_lora (bool): OPTIONAL, default to `False`; whether to use LoRA.
-        lora_rank (int): OPTIONAL, default to `None`; assign it when `use_lora=True`.
-        use_pissa (bool): OPTIONAL, default to `False`; whether to use PiSSA intialization for LoRA.
-        load_in_4bit (bool): OPTIONAL, default to `False`.
-        load_in_8bit (bool): OPTIONAL, default to `False`.
-        vocab_size (int): OPTIONAL, default to `None`. If it's assigned a non-None value, the model will adapt to the vocabulary size.
-        use_gated_memory (bool): OPTIONAL, default to `None`. Whether to use the gated-memory adapter.
-        use_prefix_tuning (bool): OPTIONAL, default to `False`. Whether to use prefix-tuning.
-        num_virtual_tokens (int): OPTIONAL, default to `None`. The number of learnable tokens in prefix-tuning.
+        model_name_or_path (`str`):
+            The name or path to the pretrained model checkpoint.
+        use_lora (`bool`, *optional*):
+            Use LoRA. Defaults to False.
+        lora_rank (`int`, *optional*):
+            The rank of LoRA adapters. Defaults to None.
+        lora_target_modules (`Union[Literal['all-linear'], List[str]]`, *optional*):
+            The target modules of LoRA adapters. Defaults to ['q_proj', 'k_proj', 'v_proj', 'o_proj'].
+        use_pissa (`bool`, *optional*):
+            Use PiSSA intialization for LoRA. Require model_name_or_path to be a PiSSA checkpoint. Defaults to False.
+        load_in_4bit (`bool`, *optional*):
+            Load in 4bit. Defaults to False.
+        load_in_8bit (`bool`, *optional*):
+            Load in 8bit. Defaults to False.
+        vocab_size (`int`, *optional*):
+            If it's assigned a non-None value, the model will adapt to the vocabulary size. Defaults to None.
+        use_gated_memory (`bool`, *optional*):
+            Use Gated Memory. Defaults to False.
+        use_prefix_tuning (`bool`, *optional*):
+            Use prefix-tuning. Defaults to False.
+        num_virtual_tokens (`int`, *optional*):
+            The number of learnable tokens in prefix-tuning. Defaults to None.
     Returns:
         model (PreTrainedModel): the model to train.
     """
@@ -121,7 +143,7 @@ def load_model(model_name_or_path: str, use_lora: bool=False, lora_rank: Optiona
         else:
             peft_config = LoraConfig(
                 task_type=TaskType.CAUSAL_LM,
-                target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+                target_modules=lora_target_modules,
                 inference_mode=False,
                 r=lora_rank,
                 lora_alpha=2 * lora_rank,

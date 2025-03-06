@@ -22,7 +22,7 @@ from lift.context_dataset import ContextDataset, RandomContextDataset
 from lift.model import load_tokenizer, load_model
 from lift.train import train
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union, Literal
 from numpy.random import randint
 from nltk import sent_tokenize
 import logging
@@ -273,6 +273,7 @@ def LooGLEtrain(
     use_random_segment: bool = False,
     use_lora: bool = False,
     lora_rank: Optional[int] = None,
+    lora_target_modules: Union[Literal['all-linear'], List[str]] = ['q_proj', 'k_proj', 'v_proj', 'o_proj'],
     use_pissa: bool = False,
     load_in_4bit: bool = False,
     involve_qa_epochs: int = 0,
@@ -286,6 +287,7 @@ def LooGLEtrain(
         model_name_or_path=model_name_or_path,
         use_lora=use_lora,
         lora_rank=lora_rank,
+        lora_target_modules=lora_target_modules,
         use_pissa=use_pissa,
         load_in_4bit=load_in_4bit,
         vocab_size=len(tokenizer),
