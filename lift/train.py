@@ -9,9 +9,37 @@ from transformers import (
     PreTrainedModel
 )
 from .context_dataset import ContextDataset
-from typing import Optional, Type
+from typing import Optional, Type, Any, List, Dict
 from copy import deepcopy
 
+
+def my_collator(features: List[Dict[str, torch.Tensor]], return_tensors="pt") -> Dict[str, torch.Tensor]:
+    """
+    Very simple data collator that simply collates batches of dict-like objects and performs special handling for
+    potential keys named:
+
+        - `label`: handles a single value (int or float) per object
+        - `label_ids`: handles a list of values per object
+
+    Does not do any additional preprocessing: property names of the input object will be used as corresponding inputs
+    to the model. See glue and ner for example of how it's useful.
+    """
+
+    # In this function we'll make the assumption that all `features` in the batch
+    # have the same attributes.
+    # So we will look at the first element as a proxy for what attributes exist
+    # on the whole batch.
+
+    if return_tensors == "pt":
+        ret = {}
+        ret["labels"] = torch.nn.utils.rnn.pad_sequence([_["labels"] for _ in features], batch_first=True, padding_value=-100, padding_side='right')
+        ret["input_ids"] = torch.nn.utils.rnn.pad_sequence([_["input_ids"] for _ in features], batch_first=True, padding_value=0, padding_side='right')
+        # print(ret)
+        return ret
+    else:
+        raise NotImplementedError
+
+    
 
 def load_trainer(model: PreTrainedModel, training_dataset: Dataset, tokenizer: PreTrainedTokenizer, training_args: TrainingArguments, eval_dataset: Optional[Dataset]=None, gather_batches: bool=False, optimizer: Optional[torch.optim.Optimizer]=None):
     """Load the training and the model (if the model is not instantiated).
@@ -35,7 +63,8 @@ def load_trainer(model: PreTrainedModel, training_dataset: Dataset, tokenizer: P
         train_dataset=training_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
-        optimizers=(optimizer, None)
+        optimizers=(optimizer, None),
+        data_collator=my_collator
     )
     return trainer, model
 
@@ -66,6 +95,7 @@ def train(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrained
     )
     if training_args.num_train_epochs > 0:
         trainer.train()
+        trainer.save_model(trainer.args.output_dir)
     # Load the dataset with QA pairs and continue-finetune the model
     if involve_qa_epochs > 0:
         dataset.enable_qa()
@@ -85,6 +115,7 @@ def train(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrained
             optimizer=trainer.optimizer,
         )
         trainer_syn.train()
+        trainer_syn.save_model(trainer.args.output_dir)
     # Clear cache
     for param in model.parameters():
         if param.requires_grad:
