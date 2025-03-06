@@ -16,34 +16,21 @@ class ModelArguments:
 
 @dataclass
 class DataTrainingArguments:
-    """
-    Arguments pertaining to what data we are going to input our model for training and eval.
-    """
     block_size: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": (
-                "Optional input sequence length after tokenization. "
-                "The training dataset will be truncated in block of this size for training. "
-                "Default to the model max input length for single sentence inputs (take into account special tokens)."
-            )
-        },
+        default=256,
+        metadata={'help': "The number of tokens in a block (a block is the unit of segments and offsets)."},
     )
     len_segment: int = field(
-        default=2,
-        metadata={
-            "help": (
-                "The number of blocks in a segment."
-            )
-        }
+        default=8,
+        metadata={'help': "The number of blocks in a segment."}
     )
     len_offset: int = field(
-        default=1,
-        metadata={
-            "help": (
-                "The offset from one segment to the next segment."
-            )
-        }
+        default=3,
+        metadata={'help': "The number of blocks in an offset from one segment to the next one."}
+    )
+    use_random_segment: bool = field(
+        default=False,
+        metadata={'help': "Randomly sample batches of segments during LIFT."}
     )
 
 
@@ -57,7 +44,7 @@ class CustomTrainingArguments:
     num_virtual_tokens: Optional[int] = field(default=None, metadata={'help': "The number of learnable tokens in prefix-tuning."})
     load_in_4bit: bool = field(default=False)
     load_in_8bit: bool = field(default=False)
-    gather_batches: bool = field(default=False)
+    gather_batches: bool = field(default=True)
     involve_qa_epochs: int = field(default=0)
     
     def __post_init__(self):
