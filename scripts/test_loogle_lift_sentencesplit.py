@@ -105,12 +105,12 @@ class ICLContextDataset(Dataset):
         input_ids = torch.tensor(input_ids, dtype=torch.long)
         labels = torch.tensor(labels, dtype=torch.long)
         labels[:len_input] = self.ignore_index  # mask the unsupervised part
-        attention_mask = torch.zeros_like(input_ids)
-        attention_mask[len_input:] = 1
+        gate_mask = torch.zeros_like(input_ids)
+        gate_mask[len_input:] = 1
         return {
             'input_ids': input_ids,
             'labels': labels,
-            'attention_mask': attention_mask,
+            'gate_mask': gate_mask,
         }
     
     def __getitem__(self, index):
@@ -208,14 +208,12 @@ class LooGLEDataset(ICLContextDataset):
             }
         ]
         input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(generator.device)
-        mask_attention = torch.ones_like(input_ids)
         # terminators = [tokenizer.eos_token_id, tokenizer.pad_token_id]
         # print("sp token", tokenizer.pad_token_id, tokenizer.eos_token_id)
         for _ in range(5):
             # print(input_ids)
             outputs = generator.generate(
                 input_ids=input_ids,
-                attention_mask=mask_attention.to(generator.device),
                 max_new_tokens=1024,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
@@ -302,11 +300,11 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
                 input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
             len_input = len(input_ids)
             input_ids = torch.tensor(input_ids, dtype=torch.long, device=model.device).unsqueeze(0)
-            attention_mask = torch.zeros_like(input_ids)
+            gate_mask = torch.zeros_like(input_ids)
             #terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
             output = model.generate(
                 input_ids=input_ids,
-                attention_mask=attention_mask,
+                gate_mask=gate_mask,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
                 max_new_tokens=1024,
@@ -315,7 +313,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             )
             response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=False)
             qa_pair['pred'] = response
-        '''
+        
         qa_pairs2 = deepcopy(qa_pairs)        
         for qa_pair in tqdm.tqdm(qa_pairs2, desc="QA Pair"):
             keywords = list(remove_stopwords(remove_punctuation(qa_pair["Q"])).split())             
@@ -328,11 +326,11 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
                 input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
             len_input = len(input_ids)
             input_ids = torch.tensor(input_ids, dtype=torch.long, device=model.device).unsqueeze(0)
-            attention_mask = torch.zeros_like(input_ids)
+            gate_mask = torch.zeros_like(input_ids)
             #terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
             output = model.generate(
                 input_ids=input_ids,
-                attention_mask=attention_mask,
+                gate_mask=gate_mask,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
                 max_new_tokens=1024,
@@ -342,7 +340,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=False)
             qa_pair['pred'] = response
         qa_pairs = qa_pairs + qa_pairs2
-        '''
+        
         output_case = {
             'title': title,
             'input': context,

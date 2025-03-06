@@ -43,6 +43,7 @@ class GMQwen2Attention(Qwen2Attention):
         attention_mask: Optional[torch.Tensor],
         past_key_value: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        gate_mask: Optional[torch.Tensor] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         #print("in4 att mask", attention_mask is not None)
@@ -86,14 +87,14 @@ class GMQwen2Attention(Qwen2Attention):
             query_states,
             key_states,
             value_states,
-            None,#attention_mask,
+            attention_mask,
             dropout=0.0 if not self.training else self.attention_dropout,
             scaling=self.scaling,
             sliding_window=sliding_window,  # main diff with Llama
             **kwargs,
         )
 
-        attn_output = attn_output + ((memgate * attention_mask.to(memgate.dtype).unsqueeze(-2).unsqueeze(-1)) * mem).transpose(1, 2)
+        attn_output = attn_output + ((memgate * gate_mask.to(memgate.dtype).unsqueeze(-2).unsqueeze(-1)) * mem).transpose(1, 2)
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
@@ -116,6 +117,7 @@ class GMQwen2DecoderLayer(Qwen2DecoderLayer):
         cache_position: Optional[torch.LongTensor] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
         output_memgate: Optional[bool] = False,
+        gate_mask: Optional[torch.Tensor] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         #print("in3 att mask", attention_mask is not None)
@@ -133,6 +135,7 @@ class GMQwen2DecoderLayer(Qwen2DecoderLayer):
             use_cache=use_cache,
             cache_position=cache_position,
             position_embeddings=position_embeddings,
+            gate_mask=gate_mask,
             **kwargs,
         )
         hidden_states = residual + hidden_states
@@ -224,6 +227,7 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
         output_memgate: Optional[bool] = False,
+        gate_mask: Optional[torch.Tensor] = None,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         #print("in2 att mask", attention_mask is not None)
@@ -258,12 +262,11 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
         # print(input_ids.shape, attention_mask.shape)
-        if input_ids.shape[-1] == 1:
-            attention_mask = torch.ones_like(input_ids)
-        causal_mask = None
-        #self._update_causal_mask(
-        #    attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
-        #)
+        if input_ids.shape[-1] == 1 or gate_mask is None:
+            gate_mask = torch.ones_like(input_ids)
+        causal_mask = self._update_causal_mask(
+            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        )
 
         hidden_states = inputs_embeds
 
@@ -285,19 +288,20 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
                     layer_outputs = self._gradient_checkpointing_func(
                         decoder_layer.__call__,
                         hidden_states,
-                        attention_mask,
+                        causal_mask,
                         position_ids,
                         past_key_values,
                         output_attentions,
                         use_cache,
                         cache_position,
                         position_embeddings,
-                        output_memgate
+                        output_memgate,
+                        gate_mask
                     )
                 else:
                     layer_outputs = decoder_layer(
                         hidden_states,
-                        attention_mask=attention_mask,
+                        attention_mask=causal_mask,
                         position_ids=position_ids,
                         past_key_value=past_key_values,
                         output_attentions=output_attentions,
@@ -305,6 +309,7 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
                         cache_position=cache_position,
                         position_embeddings=position_embeddings,
                         output_memgate=output_memgate,
+                        gate_mask=gate_mask,
                         **flash_attn_kwargs,
                     )
                 if output_memgate:
@@ -561,6 +566,7 @@ class GMQwen2ForCausalLM(GMQwen2PreTrainedModel, GenerationMixin):
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
         output_memgate: Optional[bool] = False,
+        gate_mask: Optional[torch.Tensor] = None,
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
@@ -615,6 +621,7 @@ class GMQwen2ForCausalLM(GMQwen2PreTrainedModel, GenerationMixin):
             return_dict=return_dict,
             cache_position=cache_position,
             output_memgate=output_memgate,
+            gate_mask=gate_mask,
             **kwargs,
         )
         if output_memgate:
