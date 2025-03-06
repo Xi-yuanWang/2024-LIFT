@@ -21,3 +21,5 @@ parsed
 logs.d
 outputs.d
 parsed.d
+*.png
+vis*
