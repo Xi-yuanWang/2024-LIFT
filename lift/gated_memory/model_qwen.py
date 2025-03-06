@@ -45,6 +45,7 @@ class GMQwen2Attention(Qwen2Attention):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        #print("in4 att mask", attention_mask is not None)
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
@@ -85,14 +86,14 @@ class GMQwen2Attention(Qwen2Attention):
             query_states,
             key_states,
             value_states,
-            attention_mask,
+            None,#attention_mask,
             dropout=0.0 if not self.training else self.attention_dropout,
             scaling=self.scaling,
             sliding_window=sliding_window,  # main diff with Llama
             **kwargs,
         )
 
-        attn_output = attn_output + ((memgate * attention_mask.unsqueeze(1).unsqueeze(-1)) * mem).transpose(1, 2)
+        attn_output = attn_output + ((memgate * attention_mask.to(memgate.dtype).unsqueeze(-2).unsqueeze(-1)) * mem).transpose(1, 2)
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
@@ -117,6 +118,7 @@ class GMQwen2DecoderLayer(Qwen2DecoderLayer):
         output_memgate: Optional[bool] = False,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+        #print("in3 att mask", attention_mask is not None)
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
@@ -224,6 +226,7 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
         output_memgate: Optional[bool] = False,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[Tuple, BaseModelOutputWithPast]:
+        #print("in2 att mask", attention_mask is not None)
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -254,7 +257,9 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
 
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
-
+        # print(input_ids.shape, attention_mask.shape)
+        if input_ids.shape[-1] == 1:
+            attention_mask = torch.ones_like(input_ids)
         causal_mask = None
         #self._update_causal_mask(
         #    attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
@@ -275,7 +280,7 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            if output_memgate and (self.layer_start_idx<= layer_idx <self.config.num_hidden_layers-self.layer_end_idx):
+            if self.layer_start_idx<= layer_idx <self.config.num_hidden_layers-self.layer_end_idx:
                 if self.gradient_checkpointing and self.training:
                     layer_outputs = self._gradient_checkpointing_func(
                         decoder_layer.__call__,
@@ -287,7 +292,7 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
                         use_cache,
                         cache_position,
                         position_embeddings,
-                        True
+                        output_memgate
                     )
                 else:
                     layer_outputs = decoder_layer(
@@ -299,11 +304,12 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
                         use_cache=use_cache,
                         cache_position=cache_position,
                         position_embeddings=position_embeddings,
-                        output_memgate=True,
+                        output_memgate=output_memgate,
                         **flash_attn_kwargs,
                     )
-                memgates.append(layer_outputs[-1])
-                layer_outputs = layer_outputs[:-1]
+                if output_memgate:
+                    memgates.append(layer_outputs[-1])
+                    layer_outputs = layer_outputs[:-1]
             else:
                 if self.gradient_checkpointing and self.training:
                     layer_outputs = self._gradient_checkpointing_func(
@@ -589,6 +595,7 @@ class GMQwen2ForCausalLM(GMQwen2PreTrainedModel, GenerationMixin):
         >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
         ```"""
+        #print("in att mask", attention_mask is not None)
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states

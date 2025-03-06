@@ -15,14 +15,14 @@ python scripts/mp_wrapper.py \
     --script scripts/test_loogle_lift_sentencesplit.py \
     --num_process 1 \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.ss.allQA3.jsonl \
+    --output_file outputs/subset.Agate6.jsonl \
     --subprocess_args \
-    --output_dir models/qwentrain.ss3.tmp \
+    --output_dir models/qwentrain.Agate.tmp3 \
     --overwrite False \
-    --num_syn_qa 1 \
+    --num_syn_qa 0 \
     --title_option 1 \
     --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
-    --model_name_or_path models/LinGated-Memory-Qwen2.5-32B-Instruct/ \
+    --model_name_or_path models/LinGated-Memory-Qwen2.5-32B-Instruct \
     --model_max_length 32000 \
     --block_size 256 \
     --len_segment 1 \
@@ -34,13 +34,13 @@ python scripts/mp_wrapper.py \
     --lora_rank 32 \
     --use_cot True \
     --gather_batches False \
-    --involve_qa_epochs 30 \
+    --involve_qa_epochs 0 \
     --num_train_epochs 0 \
     --remove_unused_columns True \
     --report_to none \
     --per_device_train_batch_size 32 \
     --learning_rate 3e-3 \
-    --weight_decay 1e-3 \
+    --weight_decay 1e-1 \
     --adam_beta1 0.9 \
     --adam_beta2 0.98 \
     --adam_epsilon 1e-8 \

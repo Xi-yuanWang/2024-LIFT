@@ -35,12 +35,13 @@ import string
 
 PUNC_TRANS = str.maketrans(string.punctuation, ' '*len(string.punctuation))
 def remove_punctuation(text: str):
+    text = text[:1].lower() + text[1:]
     no_punct = text.replace("'s", " ").translate(PUNC_TRANS)
     return no_punct
 
-LIFT_ICL_PROMPT = "<|im_start|>user\nBased on the article <<{title}>>, please recite the most relevant original sentence from article of the following keywords: {keywords}<|im_end|>\n<|im_start|>assistant\nSentence: "
-LOOGLEFORMAT_NON_ICL = "<|im_start|>user\nBased on the article <<{title}>>, please answer the following question concisely and accurately.\nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
-LOOGLEFORMAT_COT = "<|im_start|>user\nBased on the article <<{title}>>, please recite the most relevant original sentence from article of the following question: {question}<|im_end|>\n<|im_start|>assistant\nSentence: "
+LIFT_ICL_PROMPT = "<|im_start|>user\nBased on the article <<{title}>>, please recite the most relevant original sentence from article of the following keywords: {keywords}<|im_end|>\n<|im_start|>assistant\nSentence:"
+LOOGLEFORMAT_NON_ICL = "<|im_start|>user\nBased on the article <<{title}>>, please answer the following question concisely and accurately.\nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer:"
+LOOGLEFORMAT_COT = "<|im_start|>user\nBased on the article <<{title}>>, please recite the most relevant original sentence from article of the following question: {question}<|im_end|>\n<|im_start|>assistant\nSentence:"
 
 class ICLContextDataset(Dataset):
     """Given a piece of context, `ContextDataset` creates a torch-Dataset, using the truncation strategy described in our paper.
@@ -60,13 +61,13 @@ class ICLContextDataset(Dataset):
         self.model_max_length = model_max_length
         texts = context.replace('\0', ' ')
         sents = sent_tokenize(texts)
-
+        self.title = title
         self.data = []
         for s in range(len(sents)):
             if len(sents[s].split()) < 5:
                 continue
-            prompt = LIFT_ICL_PROMPT.format(title=title)  
-            keywords = list(remove_stopwords(remove_punctuation(sents)).split())
+            prompt = LIFT_ICL_PROMPT#.format(title=title)  
+            keywords = list(remove_stopwords(remove_punctuation(sents[s])).split())
             text = self.tokenizer(sents[s].strip() + "<|im_end|>", add_special_tokens=False)['input_ids']
             self.data.append((prompt, keywords, text))
 
@@ -104,8 +105,8 @@ class ICLContextDataset(Dataset):
         input_ids = torch.tensor(input_ids, dtype=torch.long)
         labels = torch.tensor(labels, dtype=torch.long)
         labels[:len_input] = self.ignore_index  # mask the unsupervised part
-        attention_mask = torch.ones_like(input_ids)
-        attention_mask[:len_input-1] = 0
+        attention_mask = torch.zeros_like(input_ids)
+        attention_mask[len_input:] = 1
         return {
             'input_ids': input_ids,
             'labels': labels,
@@ -117,13 +118,13 @@ class ICLContextDataset(Dataset):
         if len(self.data[index]) > 2:
             prompt, keywords, text_id = self.data[index]
             import random 
-            prompt = prompt.format(keywords=" ,".join(random.sample(keywords, k=random.randint(1, len(keywords))))+".")
+            prompt = prompt.format(title=self.title, keywords=" ,".join(random.sample(keywords, k=random.randint(1, len(keywords))))+".")
             prompt = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
             ret = self.preprocessing((prompt + text_id, len(prompt)))
         else:
             ret = self.preprocessing(self.data[index])
-        print(self.tokenizer.decode(ret["input_ids"], skip_special_tokens=False), flush=True)
-        print(self.tokenizer.decode(ret["labels"][ret["labels"]>=0], skip_special_tokens=False), flush=True)
+        #print(self.tokenizer.decode(ret["input_ids"], skip_special_tokens=False), flush=True)
+        #print(self.tokenizer.decode(ret["labels"][ret["labels"]>=0], skip_special_tokens=False), flush=True)
         return ret
     
     def enable_qa(self):
@@ -294,15 +295,14 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
                 input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=qa_pair['Q'])
             else:
                 input_text = LOOGLEFORMAT_COT.format(title=title, question=qa_pair['Q'])
-            print(f'input_text: {input_text}')
             input_ids = tokenizer(input_text, add_special_tokens=False)['input_ids']#[:-1]
             print(tokenizer.decode(input_ids, skip_special_tokens=False))
             if len(input_ids) > model_max_length:
                 raise NotImplementedError
                 input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
+            len_input = len(input_ids)
             input_ids = torch.tensor(input_ids, dtype=torch.long, device=model.device).unsqueeze(0)
-            attention_mask = torch.ones_like(input_ids)
-            attention_mask[:-1] = 0
+            attention_mask = torch.zeros_like(input_ids)
             #terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
             output = model.generate(
                 input_ids=input_ids,
@@ -315,6 +315,34 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             )
             response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=False)
             qa_pair['pred'] = response
+        '''
+        qa_pairs2 = deepcopy(qa_pairs)        
+        for qa_pair in tqdm.tqdm(qa_pairs2, desc="QA Pair"):
+            keywords = list(remove_stopwords(remove_punctuation(qa_pair["Q"])).split())             
+            input_text = LIFT_ICL_PROMPT.format(title=title, keywords=" ,".join(keywords)+".")
+            print(f'input_text: {input_text}')
+            input_ids = tokenizer(input_text, add_special_tokens=False)['input_ids']#[:-1]
+            print(tokenizer.decode(input_ids, skip_special_tokens=False))
+            if len(input_ids) > model_max_length:
+                raise NotImplementedError
+                input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
+            len_input = len(input_ids)
+            input_ids = torch.tensor(input_ids, dtype=torch.long, device=model.device).unsqueeze(0)
+            attention_mask = torch.zeros_like(input_ids)
+            #terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
+            output = model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+                max_new_tokens=1024,
+                use_cache=True,
+                do_sample=False,
+            )
+            response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=False)
+            qa_pair['pred'] = response
+        qa_pairs = qa_pairs + qa_pairs2
+        '''
         output_case = {
             'title': title,
             'input': context,
