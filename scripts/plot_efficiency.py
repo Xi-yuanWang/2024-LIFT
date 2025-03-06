@@ -49,23 +49,23 @@ plt.rcParams.update({'font.size': 18})
 plt.figure(figsize=(10, 6))
 
 # 绘制三条曲线
-plt.plot(baseline_x, baseline_y, label="Baseline", color='#4485C7', marker='o', linewidth=4)
-plt.plot(pissa_x, pissa_y, label="PiSSA", color='#DBB428', marker='o', linewidth=4)
-plt.plot(gate_x, gate_y, label="Gated Memory", color='#D4562E', marker='o', linewidth=4)
-plt.plot(baseline_xf, baseline_yf, label="Fitted Baseline", color='#79B0E9', linestyle='--', linewidth=2)
-plt.plot(pissa_xf, pissa_yf, label="Fitted PiSSA", color='#F1D77D', linestyle='--', linewidth=2)
-plt.plot(gate_xf, gate_yf, label="Fitted Gated Memory", color='#EA8D6E', linestyle='--', linewidth=2)
-plt.scatter([crossx], [crossy], color='red', marker='x', s=100)
+plt.plot(baseline_xf, baseline_yf, label="Fitted ICL", color='#4C7780', linestyle='--', linewidth=2, zorder=1)
+plt.plot(pissa_xf, pissa_yf, label="Fitted LIFT w/ PiSSA", color='#E4A031', linestyle='--', linewidth=2, zorder=1)
+plt.plot(gate_xf, gate_yf, label="Fitted LIFT w/ Gated Memory", color='#B55384', linestyle='--', linewidth=2, zorder=1)
+plt.scatter(baseline_x, baseline_y, label="ICL", color='#26445E', marker='o', zorder=2)
+plt.scatter(pissa_x, pissa_y, label="LIFT w/ PiSSA", color='#D68438', marker='o', zorder=2)
+plt.scatter(gate_x, gate_y, label="LIFT w/ Gated Memory", color='#7C4D77', marker='o', zorder=2)
+plt.scatter([crossx], [crossy], color='red', marker='x', s=100, label="OOM threshold")
 
 
 # 添加标题和标签
 # plt.title('Efficiency Comparison')
-plt.xlabel('length / token')
-plt.ylabel('average time per token / sec')
+plt.xlabel('Length (Token)')
+plt.ylabel('Average Time per Token (Sec)')
 
 # 添加图例
 plt.legend()
 
 # 显示图形
 plt.savefig('efficiency.pdf')
-plt.savefig('efficiency.png')
+# plt.savefig('efficiency.png')
