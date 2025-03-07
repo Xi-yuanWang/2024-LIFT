@@ -84,12 +84,20 @@ def retrieve_batch(client: OpenAI, batch_id, file_id, loogle_file, result_file):
             for i, d in enumerate(raw_data):
                 if 'sample' in d:
                     for j, q in enumerate(d['sample']['qa_pairs']):
-                        response = data[f'LooGLE-{i}-{j}']['response']['body']['choices'][0]['message']['content']
+                        if f'LooGLE-{i}-{j}' in data:
+                            response = data[f'LooGLE-{i}-{j}']['response']['body']['choices'][0]['message']['content']
+                        else:
+                            print(f"Fail to retrieve LooGLE-{i}-{j}!\nQ: {q['Q']}\nA: {q['A']}\nP: {q['pred']}")
+                            response = ""
                         q['score'] = 'true' in response.lower()
                     d['meta_data']['score'] = sum([q['score'] for q in d['sample']['qa_pairs']]) / len(d['sample']['qa_pairs'])
                 else:
                     for j, q in enumerate(d['qa_pairs']):
-                        response = data[f'LooGLE-{i}-{j}']['response']['body']['choices'][0]['message']['content']
+                        if f'LooGLE-{i}-{j}' in data:
+                            response = data[f'LooGLE-{i}-{j}']['response']['body']['choices'][0]['message']['content']
+                        else:
+                            print(f"Fail to retrieve LooGLE-{i}-{j}!\nQ: {q['Q']}\nA: {q['A']}\nP: {q['pred']}")
+                            response = ""
                         q['score'] = 'true' in response.lower()
             with open(result_file, 'w') as f:
                 for d in raw_data:

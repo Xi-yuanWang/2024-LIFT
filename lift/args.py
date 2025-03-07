@@ -5,9 +5,17 @@ from transformers import HfArgumentParser
 
 @dataclass
 class ModelArguments:
-    model_name_or_path: str
-    tokenizer_name_or_path: Optional[str] = field(default=None)
-    model_max_length: Optional[int] = field(default=None)
+    model_name_or_path: str = field(
+        metadata={'help': "The model to train."}
+    )
+    tokenizer_name_or_path: Optional[str] = field(
+        default=None,
+        metadata={'help': "The tokenizer. Defaults to model_name_or_path."}
+    )
+    model_max_length: Optional[int] = field(
+        default=7800,
+        metadata={'help': "The context window."}
+    )
     
     def __post_init__(self):
         if self.tokenizer_name_or_path is None:
