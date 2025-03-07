@@ -35,7 +35,8 @@ import tqdm
 LOOGLE_CHAT = "The article {title}: \n{input}\nPlease answer the question based on {title}.\nQuestion: {question}\nAnswer: "
 LOOGLE_NON_CHAT = {
     'pre-inst': "Below is an instruction that describes a task, paired with an input that provides further context.\nWrite a response that appropriately completes the request.\n\n### Instruction:\nYou are given an article {title}. Please answer the question based on {title}. Question: {question}.\n\n### Input:\n{input}\n\n### Response:\n",
-    'post-inst': "Below is an input that provides part of the article {title}, paired with an instruction that describes a task.\nWrite a response that appropriately completes the request.\n\n### Input:\n{input}\n### End of Input\n\n### Instruction:\nPlease answer the question based on {title}. Question: {question}.\n### End of Instruction\n\n### Response:\n"
+    'post-inst': "Below is an input that provides part of the article {title}, paired with an instruction that describes a task.\nWrite a response that appropriately completes the request.\n\n### Input:\n{input}\n### End of Input\n\n### Instruction:\nPlease answer the question based on {title}. Question: {question}.\n### End of Instruction\n\n### Response:\n",
+    'non-ICL': "Based on the article {title}, please answer the following question: {question}",
 }
 
 
@@ -73,6 +74,10 @@ class TestArguments:
         default=False,
         metadata={'help': "Use post-instruction. By default, we use pre-instruction."}
     )
+    use_icl: bool = field(
+        default=True,
+        metadata={'help': "Use ICL in auxiliary tasks and test tasks."}
+    )
 
     def __post_init__(self):
         if self.post_instruction and self.use_chat_template:
@@ -95,6 +100,7 @@ def load_dataset(
     use_chat_template: bool = False,
     post_instruction: bool = True,
     use_random_segment: bool = False,
+    use_icl: bool = True,
 ):
     base_class = RandomContextDataset if use_random_segment else ContextDataset
 
@@ -112,6 +118,7 @@ def load_dataset(
             generator_name_or_path: Optional[str] = None,
             use_chat_template: bool = False,
             post_instruction: bool = False,
+            use_icl: bool = True,
         ):
             context = title + '\n' + context
             super().__init__(
@@ -151,6 +158,7 @@ def load_dataset(
                         model_max_length=model_max_length,
                         use_chat_template=use_chat_template,
                         post_instruction=post_instruction,
+                        use_icl=use_icl,
                     )
                     if result is not None:
                         self.qa_data.append(result)
@@ -167,6 +175,7 @@ def load_dataset(
             model_max_length: int = 7800,
             use_chat_template: bool = False,
             post_instruction: bool = False,
+            use_icl: bool = True,
         ):
             st_pos = randint(0, len(context_sent) - 16)
             context = ' '.join(context_sent[st_pos:st_pos+16])
@@ -216,7 +225,13 @@ def load_dataset(
                 input_ids = self.tokenizer.apply_chat_template(messages, add_generation_prompt=False)
                 input_length = len(self.tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True))
             else:
-                template = LOOGLE_NON_CHAT['post-inst' if post_instruction else 'pre-inst']
+                if use_icl:
+                    if post_instruction:
+                        template = LOOGLE_NON_CHAT['post-inst']
+                    else:
+                        template = LOOGLE_NON_CHAT['pre-inst']
+                else:
+                    template = LOOGLE_NON_CHAT['non-ICL']
                 instruction_text = template.format(title=title, input=full_context, question=question)
                 input_text = instruction_text + answer + "\n### End of Response"
                 input_ids = [self.tokenizer.bos_token_id] + self.tokenizer(input_text, add_special_tokens=False)['input_ids'] + [self.tokenizer.eos_token_id]
@@ -253,6 +268,7 @@ def load_dataset(
         generator_name_or_path=generator_name_or_path,
         use_chat_template=use_chat_template,
         post_instruction=post_instruction,
+        use_icl=use_icl,
     )
 
     
@@ -281,6 +297,7 @@ def LooGLEtrain(
     use_gated_memory: bool = False,
     use_prefix_tuning: bool = False,
     num_virtual_tokens: Optional[int]=None,
+    use_icl: bool = True,
     **kwargs
 ):
     model = load_model(
@@ -308,6 +325,7 @@ def LooGLEtrain(
         use_chat_template=use_chat_template,
         post_instruction=post_instruction,
         use_random_segment=use_random_segment,
+        use_icl=use_icl,
     )
     if use_lora or use_gated_memory or use_prefix_tuning:
         model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
@@ -324,6 +342,7 @@ def prediction(
     generator_name_or_path: Optional[str] = None,
     use_chat_template: bool = False,
     post_instruction: bool = False,
+    use_icl: bool = True,
 ):
     tokenizer = load_tokenizer(lift_args['tokenizer_name_or_path'])
     mixin = tokenizer("...", add_special_tokens=False)['input_ids']
@@ -344,6 +363,7 @@ def prediction(
             use_chat_template=use_chat_template,
             post_instruction=post_instruction,
             training_args=training_args,
+            use_icl=use_icl,
             **lift_args,
         )
         model.eval()
@@ -355,7 +375,13 @@ def prediction(
                 ]
                 input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
             else:
-                template = LOOGLE_NON_CHAT['post-inst' if post_instruction else 'pre-inst']
+                if use_icl:
+                    if post_instruction:
+                        template = LOOGLE_NON_CHAT['post-inst']
+                    else:
+                        template = LOOGLE_NON_CHAT['pre-inst']
+                else:
+                    template = LOOGLE_NON_CHAT['non-ICL']
                 input_text = template.format(title=title, input=context, question=qa_pair['Q'])
                 input_ids = [tokenizer.bos_token_id] + tokenizer(input_text, add_special_tokens=False)['input_ids']
 
