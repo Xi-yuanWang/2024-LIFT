@@ -54,6 +54,8 @@ class GMQwen2Attention(Qwen2Attention):
         key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
 
+        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
+
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
@@ -62,7 +64,8 @@ class GMQwen2Attention(Qwen2Attention):
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
+        # mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
+
 
         sliding_window = None
         if (
@@ -193,8 +196,8 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.layer_start_idx = 4
-        self.layer_end_idx = 4
+        self.layer_start_idx = 0
+        self.layer_end_idx = 0
         self.layers = nn.ModuleList(
             [Qwen2DecoderLayer(config, layer_idx) for layer_idx in range(self.layer_start_idx)] + [
                 GMQwen2DecoderLayer(config, layer_idx) for layer_idx in range(self.layer_start_idx, config.num_hidden_layers-self.layer_end_idx, 1)] + [
