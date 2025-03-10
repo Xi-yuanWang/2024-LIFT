@@ -59,9 +59,7 @@ def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8
                 device_map="auto",
                 torch_dtype=torch.bfloat16,
             )
-        for param in model.parameters():
-            param.requires_grad_(False)
-        model = PeftModel.from_pretrained(model, model_name_or_path, is_trainable=True)
+        # model = PeftModel.from_pretrained(model, model_name_or_path, is_trainable=True)
         return model
     
     # We assume `peft` is available...

@@ -16,8 +16,8 @@ from lift.args import (
     parse_args
 )
 from lift.context_dataset import ContextDataset
-from lift.model import load_tokenizer, load_model
-from lift.train import train
+from lift.model import load_tokenizer, load_model, GMQwen2ForCausalLM
+from lift.train import train, kvtrain
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional,Tuple
 from numpy.random import randint
@@ -29,28 +29,10 @@ import torch
 import tqdm
 from torch.utils.data import Dataset
 from copy import deepcopy
-from gensim.parsing import remove_stopwords
-import numpy as np
-import random
-import torch
 
-LIFT_ICL_PROMPT = "<|im_start|>user\nYou have seen the article \"{title}\". Please recite the whole article.<|im_end|>\n<|im_start|>assistant\n"
-LOOGLEFORMAT_NON_ICL = "<|im_start|>user\nYou have seen the article \"{title}\". Please answer the following question concisely and accurately.\n"
-LOOGLEFORMAT_COT = "<|im_start|>user\nYou have seen the article \"{title}\". Please recite the most relevant original segment in \"{title}\" for the following question and answer this question.\n"
-QFORMAT = "Question: {question}<|im_end|>\n<|im_start|>assistant\nSure, I know the most relevant segment."
-AFORMAT = " {answer}<|im_end|>"
-
-def dropsent(sents, idx, offset: int, dropratio: float=0.05):
-    nidx = []
-    for i in idx:
-        for k in range(max(0, i-offset), min(i+offset+1, len(sents))):
-            nidx.append(k)
-    nidx = sorted(list(set(nidx)))
-    sent_sample = [sents[_] for _ in nidx if np.random.rand()>dropratio]
-    return sents
-
-def dropword(text: str, dropratio: float=0.1):
-    return " ".join([_ for _ in text.split() if np.random.rand() < dropratio])
+LIFT_ICL_PROMPT = "<|im_start|>user\n Given the article \"{title}\": "
+LOOGLEFORMAT_NON_ICL = "<|im_start|>user\nBased on the article \"{title}\", please answer the following question concisely and accurately: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
+LOOGLEFORMAT_COT = "<|im_start|>user\nBased on the article \"{title}\" and the following question, please first recall four original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nEvidence: "        
 
 class ICLContextDataset(Dataset):
     """Given a piece of context, `ContextDataset` creates a torch-Dataset, using the truncation strategy described in our paper.
@@ -69,37 +51,70 @@ class ICLContextDataset(Dataset):
         self.tokenizer = tokenizer
         self.model_max_length = model_max_length
         texts = context.replace('\0', ' ')
-        sents = sent_tokenize(texts)
-        self.sents = ["Sure, I know the article."]+[_.strip() for _ in sents]
-        self.title = title
-        self.len_segment = len_segment
-        self.len_offset = len_offset
-        perm = list(range(len(self.sents)))
-        random.shuffle(perm)
+        input_ids = self.tokenizer(texts, add_special_tokens=False)['input_ids']
+        len_segment = len_segment * block_size
+        len_offset = len_offset * block_size
 
-        idxs = []
-        for i in range(0, len(perm)+len_segment-1, len_segment):
-            idxs.append(perm[i:i+len_segment])
+        # Generate datapoints
+        mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
+        prompt = self.tokenizer(LIFT_ICL_PROMPT, add_special_tokens=False)['input_ids']
 
-        self.data = [(self.tokenizer(LIFT_ICL_PROMPT.format(title=title), add_special_tokens=False)["input_ids"], idx) for idx in idxs]
+        self.data = []
+        for s in range(0, len(input_ids) - int(0.5*len_offset), len_offset):
+            start_pos = s
+            end_pos = min(s + len_segment, len(input_ids))
+            #lift_icl_front, lift_icl_back = self.prepare_lift_icl(start_pos, end_pos, input_ids, len_segment, len_offset)
+            #lift_icl = lift_icl_front + mixin + lift_icl_back
+
+            lift_icl = prompt 
+            
+            input_len = len(lift_icl)
+            #lift = input_ids[start_pos: end_pos]
+
+            self.data.append((lift_icl, start_pos, end_pos, int(0.5*(len_offset)), input_len))
+
+            #tmp = lift_icl + lift
+        self.input_ids = input_ids
+        #self.num_segments = len(self.data)  # record the number of context datapoints
 
     def __len__(self):
         return len(self.data)#self.num_segments
     
-    def preprocessing(self, example: Tuple[List[int], List[int], List[int]]):
-        # print("enter", preprocessing)
-        prompt, Q, A = example
-        input_ids = prompt + Q + A
+    def prepare_lift_icl(self, start_pos: int, end_pos: int, input_ids: list[int], len_segment: int, len_offset: int, len_lift_icl: int=4096):
+
+        def get_fix_length_segments(front_lim: int, back_lim: int, tot_len: int):
+            """
+                return two segments,
+                satisfying frist segment length is less than 'front_lim', 
+                second segment length is less than 'back_lim'
+                and the sum of two segments' length is equal to 'tot_len'.
+
+
+                The return value is the length of the two segments.
+            """
+            a = randint(max(0, tot_len - back_lim), min(front_lim, tot_len))
+            b = tot_len - a
+            return a, b
+
+        front_len, back_len = get_fix_length_segments(len_lift_icl, len_lift_icl, len_lift_icl)
+        front_st = randint(0, len_lift_icl - front_len)
+        back_ed = randint(0, len_lift_icl - back_len)
+
+        return input_ids[front_st: front_st+front_len], input_ids[-back_ed-back_len:-back_ed] if back_ed != 0 else input_ids[-back_len:]
+
+    def preprocessing(self, example: Tuple[List[int], int]):
+        input_ids, len_input = example
         labels = deepcopy(input_ids)
-        
+        # Clip and truncation
+        input_ids = input_ids[:self.model_max_length]
+        labels = labels[:self.model_max_length]
+        # Transfer to Tensor
         input_ids = torch.tensor(input_ids, dtype=torch.long)
-        
         labels = torch.tensor(labels, dtype=torch.long)
-        labels[:len(prompt) + len(Q)] = self.ignore_index  # mask the unsupervised part
+        labels[:len_input] = self.ignore_index  # mask the unsupervised part
         gate_mask = torch.ones_like(input_ids)
-        gate_mask[len(prompt):] = 1
-            
-        dp_mask = torch.rand(input_ids.shape) > 0.05
+
+        dp_mask = torch.rand(gate_mask.shape) > 0.03
 
         return {
             'input_ids': input_ids[dp_mask],
@@ -108,18 +123,18 @@ class ICLContextDataset(Dataset):
         }
     
     def __getitem__(self, index):
-        if len(self.data[index]) == 3:
-            ret = self.preprocessing(self.data[index])
+        #print(index)
+        if len(self.data[index]) > 2:
+            lift_icl, start_pos, end_pos, var, input_len = self.data[index]
+            import random 
+            offset = random.randint(-var, var)
+            def constrainidx(a):
+                return min(max(a, 0), len(self.input_ids))
+            ret = self.preprocessing((lift_icl+self.input_ids[constrainidx(start_pos+offset): constrainidx(end_pos+offset)], input_len))
         else:
-            # print("start process", flush=True)
-            # exit()
-            prompt, idx = self.data[index]
-            Q = []
-            A = AFORMAT.format(answer=" "+" ".join(dropsent(self.sents, idx, self.len_offset, 0.05)))
-            A = self.tokenizer(A, add_special_tokens=False)["input_ids"]
-            ret = self.preprocessing((prompt, Q, A))
-        # print("end processing", ret["input_ids"].shape, ret["labels"].shape, ret["gate_mask"].shape, flush=True)
-        # raise NotImplementedError
+            ret = self.preprocessing(self.data[index])
+        #print(self.tokenizer.decode(ret["input_ids"], skip_special_tokens=False))
+        #print(self.tokenizer.decode(ret["labels"][ret["labels"]>=0], skip_special_tokens=False))
         return ret
     
     def enable_qa(self):
@@ -132,8 +147,6 @@ class ICLContextDataset(Dataset):
         raise NotImplementedError
 
 
-
-#"<|im_start|>user\nBased on the article <<{title}>>, please answer the following question.\nQuestion: {question}.\nLet's think step by step. First, please recite the most relevant three original sentences from the article <<{title}>> as evidence, and then provide an concise answer based on the sentences.<|im_end|>\n<|im_start|>assistant\n"
 
 @dataclass
 class TestArguments:
@@ -167,6 +180,7 @@ class LooGLEDataset(ICLContextDataset):
         if num_syn_qa > 0:
             self.qadata = []
             context_sent = sent_tokenize(context)
+            assert len(context_sent) >= 16, "The length of the context should be at least 25 sentences."
             generator = AutoModelForCausalLM.from_pretrained(
                 generator_name_or_path,
                 device_map='auto',
@@ -181,25 +195,24 @@ class LooGLEDataset(ICLContextDataset):
             )
             gen_tokenizer = load_tokenizer(generator_name_or_path)
             generator.eval()
-            for _ in range(len(context_sent)):
-                if len(context_sent[_].split()) < 5:
-                    continue
-                result = self.generate_task(generator, gen_tokenizer, context, context_sent[_:_+1], title, model_max_length, use_cot, use_icl=use_icl)
+            for _ in range(num_syn_qa):
+                result = self.generate_task(generator, gen_tokenizer, context, context_sent, title, model_max_length, use_cot, use_icl=use_icl)
                 if result is not None:
                     self.qadata.append(result)
         self.enable_qa_tag = False
-
+    
     @torch.no_grad()
     def generate_task(self, generator: PreTrainedModel, tokenizer: PreTrainedTokenizer, full_context: str, context_sent: List[str], title: str, model_max_length: int, use_cot: bool=False, use_icl: bool=True):
-        context = ' '.join(context_sent)
+        st_pos = randint(0, len(context_sent) - 8)
+        context = ' '.join(context_sent[st_pos:st_pos+8])
         messages = [
             {
                 'role': "system",
                 'content': "You are a helpful assistant."
             },
             {
-                'role': "user",
-                'content': f"{context}\nGiven the sentence in article <<{title}>> above, please generate a question, whose answer is in the sentence, in the following format: \nQuestion: [question]. Please do not generate other text."
+                'role': "user", 
+                'content': f"You are given a piece of text as the context. You should generate ONLY one question and the corresponding concise answer according to the context. You should also select one or more sentences directly from the original context as the evidence. The evidences must be verbatim sentences from the context. Please answer in the following format: \nQuestion: [question] \nAnswer: [answer] \nEvidence: [evidence]\nPlease DON'T output quotes when outputting evidences. The following is the piece of text: {context}"
             }
         ]
         input_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(generator.device)
@@ -216,31 +229,36 @@ class LooGLEDataset(ICLContextDataset):
             )
             response = tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
             question_position = response.find("Question:")
-
-            if question_position == -1:
+            answer_position = response.find("Answer:")
+            evidence_position = response.find("Evidence:")
+            
+            if question_position == -1 or answer_position == -1 or evidence_position == -1:
                 continue
-            question = response[question_position + 9:].strip().split("Note:")[0].strip()
+            question = response[question_position + 9:answer_position].strip()
+            answer = response[answer_position + 7:evidence_position].strip()
+            evidence = response[evidence_position + 9:].strip()
+            if evidence not in context:
+                pass #continue
             break
         else:
             logging.warning("Fail to generate a QA pair, skip.")
             return None
         if not use_cot:
-            input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=question)
+            input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=qa_pair['Q'])
         else:
-            input_text = LOOGLEFORMAT_COT.format(title=title, question=question)
-        answer = context
-        example = input_text# + ' ' + answer# + self.tokenizer.eos_token
-        # print(f'syn input text: {example}', flush=True)
+            input_text = LOOGLEFORMAT_COT.format(title=title, question=qa_pair['Q'])
+        example = input_text + ' ' + answer# + self.tokenizer.eos_token
+        print(f'syn input text: {example}')
         input_ids = self.tokenizer(example, add_special_tokens=False)['input_ids']
-        input_ids = input_ids + self.tokenizer(answer, add_special_tokens=False)['input_ids']
         input_ids = input_ids + [self.tokenizer.eos_token_id]
-        input_length = len(self.tokenizer(input_text, add_special_tokens=False)['input_ids'])
+        input_length = len(self.tokenizer(input_text, add_special_tokens=False)['input_ids']) 
+        mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
         output_length = len(input_ids) - input_length
         if len(input_ids) > model_max_length:
             raise NotImplementedError
             input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
             input_length = len(input_ids) - output_length
-        return (input_ids, input_length) 
+        return (input_ids, input_length)
     
     def enable_qa(self):
         self.enable_qa_tag = True
@@ -254,16 +272,38 @@ class LooGLEDataset(ICLContextDataset):
         return len(self.data) #if self.enable_qa_tag else self.num_segments
     
     
-def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_gated_memory: bool=False, use_cot: bool=False, use_icl: bool=True, **kwargs):
+def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_gated_memory: bool=False, use_cot: bool=False, use_icl: bool=True, kv_epochs: int=0, **kwargs):
     model = load_model(model_name_or_path=model_name_or_path, use_lora=use_lora, lora_rank=lora_rank, use_pissa=use_pissa, load_in_4bit=load_in_4bit, vocab_size=len(tokenizer), use_gated_memory=use_gated_memory)
-    if use_lora or use_gated_memory:
-        dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
-        model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
+    dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
+    from peft import get_peft_model, LoraConfig, TaskType
+    lora_config1 = LoraConfig(
+            r=1,
+            target_modules=["lm_head"],
+            task_type=TaskType.CAUSAL_LM,
+            lora_alpha=0.0,
+            modules_to_save=[f"layers.{i}.self_attn.mem_proj" for i in range(len(model.model.layers))],
+        )
+    model = get_peft_model(model, lora_config1)
+    model.save_pretrained(training_args.output_dir, "before_kvmem")
+    model = kvtrain(model, dataset, tokenizer, training_args, kv_epochs, gather_batches)[0]
+    model.save_pretrained(training_args.output_dir, "after_kvmem")
+    model = model.merge_and_unload()
+    lora_config2 = LoraConfig(
+            r=1,
+            target_modules=["lm_head"],
+            task_type=TaskType.CAUSAL_LM,
+            lora_alpha=0.0,
+            modules_to_save=[f"layers.{i}.self_attn.gate_proj" for i in range(len(model.model.layers))],
+        )
+    model = get_peft_model(model, lora_config2)
+    model.save_pretrained(training_args.output_dir, "before gate")
+    model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
     return model
 
 
 def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Dict, output_file: str, num_resumed: int=0, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_cot: bool=False, use_icl: bool=True):
     tokenizer = load_tokenizer(lift_args['tokenizer_name_or_path'])
+    mixin = tokenizer("...", add_special_tokens=False)['input_ids']
     model_max_length = lift_args['model_max_length']
     
     for i, sample in enumerate(tqdm.tqdm(data, desc="Sample")):
@@ -285,44 +325,17 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
         for qa_pair in tqdm.tqdm(qa_pairs, desc="QA Pair"):
             
             if not use_cot:
-                prompt = LOOGLEFORMAT_NON_ICL.format(title=title) 
-                Q = QFORMAT.format(question=qa_pair['Q'])
+                input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=qa_pair['Q'])
             else:
-                prompt = LOOGLEFORMAT_COT.format(title=title)
-                Q = QFORMAT.format(question=qa_pair['Q'])
-            prompt = tokenizer(prompt, add_special_tokens=False)['input_ids']
-            Q = tokenizer(Q, add_special_tokens=False)['input_ids']
-            print(tokenizer.decode(prompt + Q, skip_special_tokens=False))
-            input_ids = torch.tensor(prompt + Q, dtype=torch.long, device=model.device).unsqueeze(0)
-            gate_mask = torch.ones_like(input_ids)
-            gate_mask[len(prompt):] = 1
-            #terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
-            output = model.generate(
-                input_ids=input_ids,
-                gate_mask=gate_mask,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-                max_new_tokens=1024,
-                use_cache=True,
-                do_sample=False,
-            )
-            response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=False)
-            qa_pair['pred'] = response
-        ''' 
-        qa_pairs2 = deepcopy(qa_pairs)        
-        for qa_pair in tqdm.tqdm(qa_pairs2, desc="QA Pair"):
-            keywords = list(remove_stopwords(remove_punctuation(qa_pair["Q"])).split())             
-            input_text = LIFT_ICL_PROMPT.format(title=title, keywords=" ".join(keywords)+".")
+                input_text = LOOGLEFORMAT_COT.format(title=title, question=qa_pair['Q'])
             print(f'input_text: {input_text}')
             input_ids = tokenizer(input_text, add_special_tokens=False)['input_ids']#[:-1]
             print(tokenizer.decode(input_ids, skip_special_tokens=False))
             if len(input_ids) > model_max_length:
                 raise NotImplementedError
                 input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
-            len_input = len(input_ids)
             input_ids = torch.tensor(input_ids, dtype=torch.long, device=model.device).unsqueeze(0)
-            gate_mask = torch.zeros_like(input_ids)
-            #terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
+            gate_mask = torch.ones_like(input_ids)
             output = model.generate(
                 input_ids=input_ids,
                 gate_mask=gate_mask,
@@ -332,10 +345,8 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
                 use_cache=True,
                 do_sample=False,
             )
-            response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=False)
+            response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=True)
             qa_pair['pred'] = response
-        qa_pairs = qa_pairs + qa_pairs2
-        '''
         output_case = {
             'title': title,
             'input': context,

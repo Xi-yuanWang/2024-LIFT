@@ -1,5 +1,6 @@
 import torch
 import torch.utils
+from torch import Tensor
 from torch.utils.data import Dataset
 import torch.utils.data
 from transformers import (
@@ -11,7 +12,8 @@ from transformers import (
 from .context_dataset import ContextDataset
 from typing import Optional, Type, Any, List, Dict
 from copy import deepcopy
-
+from .gated_memory.model_qwen import GMQwen2ForCausalLM
+import os.path as osp
 
 def my_collator(features: List[Dict[str, torch.Tensor]], return_tensors="pt") -> Dict[str, torch.Tensor]:
     """
@@ -70,6 +72,44 @@ def load_trainer(model: PreTrainedModel, training_dataset: Dataset, tokenizer: P
     return trainer, model
 
 
+def kvtrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: PreTrainedTokenizer, training_args: TrainingArguments, kv_epoches: int=0, gather_batches: bool=True):
+    """Fine-tune the model and the corresponding tokenizer.
+    Args:
+        model (PreTrainedModel): the model to fine-tune.
+        dataset (ContextDataset): the dataset for fine-tuning.
+        tokenizer (PreTrainedTokenizer): the pretrained tokenizer.
+        training_args (TrainingArguments): the huggingface training arguments.
+        involve_qa_epochs (int): OPTIONAL, default to `0`; the number of epochs to involve QA pairs.
+        gather_batches (bool): OPTIONAL, default to `True`; if `gather_batches=True`, it will force the trainer to update the model only once every epoch; it may lead to more stable gradients.
+    Returns:
+        model_tokenizer_pair (tuple[PreTrainedModel, PreTrainedTokenizer]): the fine-tuned model and the corresponding tokenizer.
+    """
+    model.eval()
+    torch.cuda.empty_cache()  # Manually release memory
+    dataset.disable_qa()
+    print("kv train numel", sum([_.numel() for _ in model.parameters() if _.requires_grad]))
+    optimizer = torch.optim.AdamW([_ for _ in model.parameters() if _.requires_grad], lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
+    for _ in range(kv_epoches):
+        for data in dataset:
+            optimizer.zero_grad()
+            with torch.no_grad():
+                input_id = data["input_ids"].to(model.device)
+                kvcache = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), use_cache=True).past_key_values
+                ks: List[Tensor] = kvcache.key_cache
+                vs: List[Tensor] = kvcache.value_cache
+            loss = 0.
+            for layer_idx in range(model.model.layer_start_idx, model.config.num_hidden_layers-model.model.layer_end_idx):
+                model.model.layers[layer_idx].unset_memproj_numgroup()
+                k, v = ks[layer_idx], vs[layer_idx]
+                out = model.model.layers[layer_idx].mem_proj(k)
+                loss = loss + torch.mean(torch.square(out - v))
+                model.model.layers[layer_idx].set_memproj_numgroup()
+            loss.backward()
+            print(f"kv loss {loss.item():.3e}", flush=True)
+            optimizer.step()
+    return model, optimizer
+
+
 def train(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrainedTokenizer, training_args: TrainingArguments, involve_qa_epochs: int=0, gather_batches: bool=True):
     """Fine-tune the model and the corresponding tokenizer.
     Args:
@@ -96,7 +136,7 @@ def train(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrained
     )
     if training_args.num_train_epochs > 0:
         trainer.train()
-        trainer.save_model(trainer.args.output_dir)
+        trainer.save_model(osp.join(trainer.args.output_dir, "after_lift"))
     # Load the dataset with QA pairs and continue-finetune the model
     if involve_qa_epochs > 0:
         dataset.enable_qa()
@@ -116,7 +156,7 @@ def train(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrained
             optimizer=trainer.optimizer,
         )
         trainer_syn.train()
-        trainer_syn.save_model(trainer.args.output_dir)
+        trainer_syn.save_model(osp.join(trainer_syn.args.output_dir, "after_syn_qa"))
     # Clear cache
     for param in model.parameters():
         if param.requires_grad:

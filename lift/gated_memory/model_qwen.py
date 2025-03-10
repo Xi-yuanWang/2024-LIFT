@@ -9,7 +9,7 @@ from typing import Callable, List, Optional, Tuple, Union
 import torch
 from torch import nn
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Config, Cache, FlashAttentionKwargs, Unpack, Qwen2Attention, apply_rotary_pos_emb, eager_attention_forward, logger, ALL_ATTENTION_FUNCTIONS, Qwen2MLP, Qwen2RMSNorm, Qwen2DecoderLayer, PreTrainedModel, Qwen2RotaryEmbedding, BaseModelOutputWithPast, DynamicCache, StaticCache, SlidingWindowCache, AttentionMaskConverter, LossKwargs, GenerationMixin, CausalLMOutputWithPast
-from lift.gated_memory.model import GroupedLinear, MyRMSNorm, BiasScale
+from lift.gated_memory.model import GroupedLinear, MyRMSNorm, BiasScale, BiasSigmoid
 
 class GMQwen2Attention(Qwen2Attention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -23,7 +23,6 @@ class GMQwen2Attention(Qwen2Attention):
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=True),
             nn.SiLU(inplace=True),
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=True),
-            MyRMSNorm()
             )
         gatedim = int(self.head_dim**0.5)
         tmp = GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, gatedim, 1, bias=False)
@@ -33,8 +32,18 @@ class GMQwen2Attention(Qwen2Attention):
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, gatedim, bias=False),
             nn.SiLU(inplace=True),
             tmp,
-            BiasScale()#nn.Sigmoid()
+            BiasSigmoid()#nn.Sigmoid()#nn.Softplus(beta=20)
             )
+    
+    def unset_memproj_numgroup(self):
+        for mod in self.mem_proj:
+            if isinstance(mod, GroupedLinear):
+                mod.num_repeat = 1
+    
+    def set_memproj_numgroup(self):
+        for mod in self.mem_proj:
+            if isinstance(mod, GroupedLinear):
+                mod.num_repeat = self.num_key_value_groups
 
     def forward(
         self,
@@ -54,8 +63,6 @@ class GMQwen2Attention(Qwen2Attention):
         key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
 
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
-
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
@@ -64,8 +71,7 @@ class GMQwen2Attention(Qwen2Attention):
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        # mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
-
+        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
 
         sliding_window = None
         if (
@@ -96,9 +102,9 @@ class GMQwen2Attention(Qwen2Attention):
             sliding_window=sliding_window,  # main diff with Llama
             **kwargs,
         )
-
-        attn_output = attn_output + ((memgate * gate_mask.to(memgate.dtype).unsqueeze(-2).unsqueeze(-1)) * mem).transpose(1, 2)
-
+        memgate2 = (memgate * gate_mask.to(memgate.dtype).unsqueeze(-2).unsqueeze(-1)).transpose(1, 2)
+        mem2 = mem.transpose(1, 2)
+        attn_output = (1-memgate2) * attn_output + memgate2 * mem2
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights, memgate
@@ -265,7 +271,7 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
         # print(input_ids.shape, attention_mask.shape)
-        if input_ids.shape[-1] == 1 or gate_mask is None:
+        if input_ids.shape[-1] == 1: # or gate_mask is None:
             gate_mask = torch.ones_like(input_ids)
         causal_mask = self._update_causal_mask(
             attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
