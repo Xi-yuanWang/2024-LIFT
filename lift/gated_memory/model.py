@@ -46,7 +46,7 @@ class GroupedLinear(nn.Module):
         '''
         x: (bsz, #group_size*#repeat, q_len, #in_dim)
         '''
-        x = x.unflatten(1, (self.group_size, self.num_repeat))
+        x = x.unflatten(1, (self.group_size, -1))#self.num_repeat))
         if self.bias is None:
             x = x @ self.weight.unsqueeze(1)
         else:
