@@ -99,13 +99,14 @@ def kvtrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: PreTr
                 kvcache = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), use_cache=True).past_key_values
                 ks: List[Tensor] = kvcache.key_cache
                 vs: List[Tensor] = kvcache.value_cache
-            loss = 0.
+            memouts = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=kvcache, use_cache=True, output_memout=True)
+            loss = []
             for layer_idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
                 # basemodel.layers[layer_idx].self_attn.unset_memproj_numgroup()
-                k, v = ks[layer_idx], vs[layer_idx]
-                out = basemodel.layers[layer_idx].self_attn.mem_proj(k)
-                loss = loss + torch.mean(torch.square(out - v))
+                k, v, memout = ks[layer_idx], vs[layer_idx], memouts[layer_idx]
+                loss.append(torch.mean(torch.square(memout - v)))
                 # basemodel.layers[layer_idx].self_attn.set_memproj_numgroup()
+            loss = torch.stack(loss).mean()
             loss.backward()
             print(f"kv loss {loss.item():.3e}", flush=True)
             optimizer.step()

@@ -53,8 +53,11 @@ class GMQwen2Attention(Qwen2Attention):
         past_key_value: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
         gate_mask: Optional[torch.Tensor] = None,
+        output_memout: Optional[bool] = False,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        if output_memout:
+            return self.mem_proj(past_key_value.key_cache[self.layer_idx])
         #print("in4 att mask", attention_mask is not None)
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
@@ -127,8 +130,23 @@ class GMQwen2DecoderLayer(Qwen2DecoderLayer):
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
         output_memgate: Optional[bool] = False,
         gate_mask: Optional[torch.Tensor] = None,
+        output_memout: Optional[bool] = False,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+        if output_memout:
+            return self.self_attn(
+                hidden_states=None,
+                attention_mask=None,
+                position_ids=None,
+                past_key_value=past_key_value,
+                output_attentions=None,
+                use_cache=True,
+                cache_position=None,
+                position_embeddings=None,
+                gate_mask=None,
+                output_memout=output_memout,
+                **kwargs,
+            )
         #print("in3 att mask", attention_mask is not None)
         residual = hidden_states
 
@@ -237,9 +255,32 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
         cache_position: Optional[torch.LongTensor] = None,
         output_memgate: Optional[bool] = False,
         gate_mask: Optional[torch.Tensor] = None,
+        output_memout: Optional[bool] = False,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         #print("in2 att mask", attention_mask is not None)
+
+        if output_memout:
+            assert past_key_values is not None
+            memouts = {}
+            for layer_idx in range(self.layer_start_idx, self.config.num_hidden_layers-self.layer_end_idx):
+                memouts[layer_idx] = self.layers[layer_idx](
+                        None,
+                        attention_mask=None,
+                        position_ids=None,
+                        past_key_value=past_key_values,
+                        output_attentions=False,
+                        use_cache=True,
+                        cache_position=None,
+                        position_embeddings=None,
+                        output_memgate=None,
+                        gate_mask=None,
+                        output_memout=output_memout,
+                        **flash_attn_kwargs,
+                    )
+            return memouts
+
+
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -576,6 +617,7 @@ class GMQwen2ForCausalLM(GMQwen2PreTrainedModel, GenerationMixin):
         logits_to_keep: Union[int, torch.Tensor] = 0,
         output_memgate: Optional[bool] = False,
         gate_mask: Optional[torch.Tensor] = None,
+        output_memout: Optional[bool] = False,
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
@@ -617,6 +659,9 @@ class GMQwen2ForCausalLM(GMQwen2PreTrainedModel, GenerationMixin):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        if output_memout:
+            assert past_key_values is not None
+
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
             input_ids=input_ids,
@@ -631,8 +676,11 @@ class GMQwen2ForCausalLM(GMQwen2PreTrainedModel, GenerationMixin):
             cache_position=cache_position,
             output_memgate=output_memgate,
             gate_mask=gate_mask,
+            output_memout=output_memout
             **kwargs,
         )
+        if output_memout:
+            return outputs
         if output_memgate:
             outputs, memgate = outputs
 
