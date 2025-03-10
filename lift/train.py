@@ -90,16 +90,21 @@ def kvtrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: PreTr
     print("kv train numel", sum([_.numel() for _ in model.parameters() if _.requires_grad]))
     optimizer = torch.optim.AdamW([_ for _ in model.parameters() if _.requires_grad], lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
     basemodel = model.model.model
-    
-    for _ in range(kv_epoches):
+    from tqdm import tqdm
+    for _ in tqdm(range(kv_epoches)):
         for data in dataset:
             optimizer.zero_grad()
             with torch.no_grad():
                 input_id = data["input_ids"].unsqueeze(0).to(model.device)
-                kvcache = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), use_cache=True).past_key_values
+                outputs = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), use_cache=True)
+                kvcache = outputs.past_key_values
                 ks: List[Tensor] = kvcache.key_cache
                 vs: List[Tensor] = kvcache.value_cache
+            #print("in", ks[0], vs[0])
+            #print("in2", ks[1], vs[1])
             memouts = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=kvcache, use_cache=True, output_memout=True)
+            #print("out", memouts[0])
+            #exit()    
             loss = []
             for layer_idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
                 # basemodel.layers[layer_idx].self_attn.unset_memproj_numgroup()

@@ -676,7 +676,7 @@ class GMQwen2ForCausalLM(GMQwen2PreTrainedModel, GenerationMixin):
             cache_position=cache_position,
             output_memgate=output_memgate,
             gate_mask=gate_mask,
-            output_memout=output_memout
+            output_memout=output_memout,
             **kwargs,
         )
         if output_memout:

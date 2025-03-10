@@ -48,8 +48,7 @@ def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8
                 trust_remote_code=True,
                 device_map="auto",
                 torch_dtype=torch.bfloat16,
-                quantization_config=quantization_config
-            )
+                quantization_config=quantization_config) # low_cpu_mem_usage=True
         elif load_in_8bit:
             raise NotImplementedError
         else:
@@ -57,8 +56,7 @@ def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8
                 model_name_or_path,
                 trust_remote_code=True,
                 device_map="auto",
-                torch_dtype=torch.bfloat16,
-            )
+                torch_dtype=torch.bfloat16)
         # model = PeftModel.from_pretrained(model, model_name_or_path, is_trainable=True)
         return model
     
