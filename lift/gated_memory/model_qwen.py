@@ -11,6 +11,16 @@ from torch import nn
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Config, Cache, FlashAttentionKwargs, Unpack, Qwen2Attention, apply_rotary_pos_emb, eager_attention_forward, logger, ALL_ATTENTION_FUNCTIONS, Qwen2MLP, Qwen2RMSNorm, Qwen2DecoderLayer, PreTrainedModel, Qwen2RotaryEmbedding, BaseModelOutputWithPast, DynamicCache, StaticCache, SlidingWindowCache, AttentionMaskConverter, LossKwargs, GenerationMixin, CausalLMOutputWithPast
 from lift.gated_memory.model import GroupedLinear, MyRMSNorm, BiasScale, BiasSigmoid
 
+
+class DistillCache(DynamicCache):
+    
+    def __init__(self, num_hidden_layers: Optional[int] = None) -> None:
+        super().__init__()
+        self.query_cache = {}
+        self.attnout_cache = {}
+        self.virtual_attnout_cache = {}
+
+
 class GMQwen2Attention(Qwen2Attention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
@@ -54,11 +64,18 @@ class GMQwen2Attention(Qwen2Attention):
         past_key_value: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
         gate_mask: Optional[torch.Tensor] = None,
-        output_memout: Optional[bool] = False,
+        output_memout: Optional[int] = 0,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         if output_memout:
-            return self.mem_proj(past_key_value.key_cache[self.layer_idx])
+            if isinstance(past_key_value, DistillCache):
+                if output_memout == 1:
+                    return self.mem_proj(past_key_value.query_cache[self.layer_idx])
+                elif output_memout == -1:
+                    return self.gate_proj(past_key_value.query_cache[self.layer_idx])
+                raise NotImplementedError
+            else:
+                return self.mem_proj(past_key_value.key_cache[self.layer_idx])
         #print("in4 att mask", attention_mask is not None)
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
@@ -74,6 +91,9 @@ class GMQwen2Attention(Qwen2Attention):
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        if isinstance(past_key_value, DistillCache):
+            past_key_value.query_cache[self.layer_idx] = query_states
 
         mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
 
@@ -106,6 +126,8 @@ class GMQwen2Attention(Qwen2Attention):
             sliding_window=sliding_window,  # main diff with Llama
             **kwargs,
         )
+        if isinstance(past_key_value, DistillCache):
+            past_key_value.attnout_cache[self.layer_idx] = attn_output
         memgate2 = (memgate * gate_mask.to(memgate.dtype).unsqueeze(-2).unsqueeze(-1)).transpose(1, 2)
         mem2 = mem.transpose(1, 2)
         attn_output = (1-memgate2) * attn_output + memgate2 * mem2
@@ -131,7 +153,7 @@ class GMQwen2DecoderLayer(Qwen2DecoderLayer):
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
         output_memgate: Optional[bool] = False,
         gate_mask: Optional[torch.Tensor] = None,
-        output_memout: Optional[bool] = False,
+        output_memout: Optional[int] = 0,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         if output_memout:
@@ -256,7 +278,7 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
         cache_position: Optional[torch.LongTensor] = None,
         output_memgate: Optional[bool] = False,
         gate_mask: Optional[torch.Tensor] = None,
-        output_memout: Optional[bool] = False,
+        output_memout: Optional[int] = 0,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         #print("in2 att mask", attention_mask is not None)
@@ -618,7 +640,7 @@ class GMQwen2ForCausalLM(GMQwen2PreTrainedModel, GenerationMixin):
         logits_to_keep: Union[int, torch.Tensor] = 0,
         output_memgate: Optional[bool] = False,
         gate_mask: Optional[torch.Tensor] = None,
-        output_memout: Optional[bool] = False,
+        output_memout: Optional[int] = 0,
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""

@@ -17,7 +17,7 @@ from lift.args import (
 )
 from lift.context_dataset import ContextDataset
 from lift.model import load_tokenizer, load_model, GMQwen2ForCausalLM
-from lift.train import train, kvtrain
+from lift.train import train, distilltrain
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional,Tuple
 from numpy.random import randint
@@ -31,8 +31,65 @@ from torch.utils.data import Dataset
 from copy import deepcopy
 
 LIFT_ICL_PROMPT = "<|im_start|>user\n Given the article \"{title}\": "
-LOOGLEFORMAT_NON_ICL = "<|im_start|>user\nBased on the article \"{title}\", please answer the following question concisely and accurately: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
-LOOGLEFORMAT_COT = "<|im_start|>user\nBased on the article \"{title}\" and the following question, please first recall four original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nEvidence: "        
+LOOGLEFORMAT_NON_ICL = "\n Based on the article \"{title}\", please answer the following question concisely and accurately: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
+LOOGLEFORMAT_COT = " Based on the article \"{title}\" and the following question, please first recall four original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nEvidence: "        
+
+
+class DistillDataset(Dataset):
+    """Given a piece of context, `ContextDataset` creates a torch-Dataset, using the truncation strategy described in our paper.
+    """
+    def __init__(self, title: str, context: str, tokenizer: PreTrainedTokenizer, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3):
+        """
+        Args:
+            context (str): the context to train on.
+            tokenizer (PreTrainedTokenizer): the AutoTokenizer.
+            model_max_length (int): OPTIONAL, default to `4096`; the texts will be clipped at the `model_max_length`-th token.
+            block_size (int): OPTIONAL, default to `256`; the number of tokens in a block; a block is the unit of segments and offsets.
+            len_segment (int): OPTIONAL, default to `8`; the number of units in a segment; the article is divided into segments.
+            len_offset (int): OPTIONAL, default to `3`; the number of units per offset; it determines the offset from one segment to the next one.
+        """
+        self.ignore_index = -100  # The default value for ignored labels in torch
+        self.tokenizer = tokenizer
+        self.model_max_length = model_max_length
+        texts = context.replace('\0', ' ')
+        len_segment = len_segment * block_size
+        input_ids = self.tokenizer(texts, add_special_tokens=False)['input_ids'][:len_segment]
+
+        prompt = LIFT_ICL_PROMPT.format(title=title)
+        prompt = self.tokenizer(prompt, add_special_tokens=False)['input_ids']
+
+        context = torch.tensor(prompt + input_ids, dtype=torch.long)
+        len_context = len(context)
+        self.data = []
+        for _ in range(20):
+            self.data.append({
+                'input_ids': torch.concat((
+                    context, 
+                    torch.randint((8192-len_context,), 0, tokenizer.vocab_size + 1)
+                    ), dim=0
+                    ),
+                'len_context': len_context,
+                })
+
+    def __len__(self):
+        return len(self.data)#self.num_segments
+    
+    def __getitem__(self, index):
+        #print(index)
+        ret = self.data[index]
+        #print(self.tokenizer.decode(ret["input_ids"], skip_special_tokens=False))
+        #print(self.tokenizer.decode(ret["labels"][ret["labels"]>=0], skip_special_tokens=False))
+        return ret
+    
+    def enable_qa(self):
+        raise NotImplementedError
+    
+    def disable_qa(self):
+        raise NotImplementedError
+    
+    def generate_task(self):
+        raise NotImplementedError
+
 
 class ICLContextDataset(Dataset):
     """Given a piece of context, `ContextDataset` creates a torch-Dataset, using the truncation strategy described in our paper.
@@ -55,11 +112,10 @@ class ICLContextDataset(Dataset):
         len_segment = len_segment * block_size
         len_offset = len_offset * block_size
 
-        # Generate datapoints
-        mixin = self.tokenizer("...", add_special_tokens=False)['input_ids']
+
         prompt = LIFT_ICL_PROMPT.format(title=title)
         prompt = self.tokenizer(prompt, add_special_tokens=False)['input_ids']
-        
+
         self.data = []
         for s in range(0, len(input_ids) - int(0.5*len_offset), len_offset):
             start_pos = s
@@ -81,28 +137,6 @@ class ICLContextDataset(Dataset):
     def __len__(self):
         return len(self.data)#self.num_segments
     
-    def prepare_lift_icl(self, start_pos: int, end_pos: int, input_ids: list[int], len_segment: int, len_offset: int, len_lift_icl: int=4096):
-
-        def get_fix_length_segments(front_lim: int, back_lim: int, tot_len: int):
-            """
-                return two segments,
-                satisfying frist segment length is less than 'front_lim', 
-                second segment length is less than 'back_lim'
-                and the sum of two segments' length is equal to 'tot_len'.
-
-
-                The return value is the length of the two segments.
-            """
-            a = randint(max(0, tot_len - back_lim), min(front_lim, tot_len))
-            b = tot_len - a
-            return a, b
-
-        front_len, back_len = get_fix_length_segments(len_lift_icl, len_lift_icl, len_lift_icl)
-        front_st = randint(0, len_lift_icl - front_len)
-        back_ed = randint(0, len_lift_icl - back_len)
-
-        return input_ids[front_st: front_st+front_len], input_ids[-back_ed-back_len:-back_ed] if back_ed != 0 else input_ids[-back_len:]
-
     def preprocessing(self, example: Tuple[List[int], int]):
         input_ids, len_input = example
         labels = deepcopy(input_ids)
@@ -275,29 +309,21 @@ class LooGLEDataset(ICLContextDataset):
     
 def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_gated_memory: bool=False, use_cot: bool=False, use_icl: bool=True, kv_epochs: int=0, **kwargs):
     model = load_model(model_name_or_path=model_name_or_path, use_lora=use_lora, lora_rank=lora_rank, use_pissa=use_pissa, load_in_4bit=load_in_4bit, vocab_size=len(tokenizer), use_gated_memory=use_gated_memory)
-    dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
+    
     from peft import get_peft_model, LoraConfig, TaskType
     lora_config1 = LoraConfig(
             r=1,
             target_modules=["lm_head"],
             task_type=TaskType.CAUSAL_LM,
             lora_alpha=0.0,
-            modules_to_save=[f"layers.{i}.self_attn.mem_proj" for i in range(len(model.model.layers))],
+            modules_to_save=[f"layers.{i}.self_attn.mem_proj" for i in range(len(model.model.layers))] + [f"layers.{i}.self_attn.gate_proj" for i in range(len(model.model.layers))],
         )
     model = get_peft_model(model, lora_config1)
     model.save_pretrained(training_args.output_dir, "before_kvmem")
-    model = kvtrain(model, dataset, tokenizer, training_args, kv_epochs, gather_batches)[0]
+    dataset = DistillDataset(title, context, tokenizer, model_max_length, block_size, len_segment, len_offset)
+    model = distilltrain(model, dataset, tokenizer, training_args, kv_epochs, gather_batches)[0]
     model.save_pretrained(training_args.output_dir, "after_kvmem")
-    model = model.merge_and_unload()
-    lora_config2 = LoraConfig(
-            r=1,
-            target_modules=["lm_head"],
-            task_type=TaskType.CAUSAL_LM,
-            lora_alpha=0.0,
-            modules_to_save=[f"layers.{i}.self_attn.gate_proj" for i in range(len(model.model.layers))],
-        )
-    model = get_peft_model(model, lora_config2)
-    model.save_pretrained(training_args.output_dir, "before gate")
+    dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
     model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
     return model
 

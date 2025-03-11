@@ -12,7 +12,7 @@ from transformers import (
 from .context_dataset import ContextDataset
 from typing import Optional, Type, Any, List, Dict
 from copy import deepcopy
-from .gated_memory.model_qwen import GMQwen2ForCausalLM
+from .gated_memory.model_qwen import GMQwen2ForCausalLM, DistillCache
 import os.path as osp
 
 def my_collator(features: List[Dict[str, torch.Tensor]], return_tensors="pt") -> Dict[str, torch.Tensor]:
@@ -37,7 +37,6 @@ def my_collator(features: List[Dict[str, torch.Tensor]], return_tensors="pt") ->
         ret["labels"] = torch.nn.utils.rnn.pad_sequence([_["labels"] for _ in features], batch_first=True, padding_value=-100, padding_side='right')
         ret["input_ids"] = torch.nn.utils.rnn.pad_sequence([_["input_ids"] for _ in features], batch_first=True, padding_value=0, padding_side='right')
         ret["gate_mask"] = torch.nn.utils.rnn.pad_sequence([_["gate_mask"] for _ in features], batch_first=True, padding_value=1, padding_side='right')
-        # print(ret)
         return ret
     else:
         raise NotImplementedError
@@ -114,6 +113,113 @@ def kvtrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: PreTr
                 loss = torch.stack(loss).mean()
                 loss.backward()
                 print(f"kv loss {loss.item():.3e}", flush=True)
+                optimizer.step()
+                optimizer.zero_grad()
+    return model, optimizer
+
+
+def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: PreTrainedTokenizer, training_args: TrainingArguments, kv_epoches: int=0, gather_batches: bool=True):
+    """Fine-tune the model and the corresponding tokenizer.
+    Args:
+        model (PreTrainedModel): the model to fine-tune.
+        dataset (ContextDataset): the dataset for fine-tuning.
+        tokenizer (PreTrainedTokenizer): the pretrained tokenizer.
+        training_args (TrainingArguments): the huggingface training arguments.
+        involve_qa_epochs (int): OPTIONAL, default to `0`; the number of epochs to involve QA pairs.
+        gather_batches (bool): OPTIONAL, default to `True`; if `gather_batches=True`, it will force the trainer to update the model only once every epoch; it may lead to more stable gradients.
+    Returns:
+        model_tokenizer_pair (tuple[PreTrainedModel, PreTrainedTokenizer]): the fine-tuned model and the corresponding tokenizer.
+    """
+    import torch
+
+
+    def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+        """
+        This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+        num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+        """
+        batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+        if n_rep == 1:
+            return hidden_states
+        hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+        return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+
+    def sdpa_attention_forward(
+        num_key_value_groups: int,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        dropout: float = 0.0,
+        scaling: Optional[float] = None,
+        **kwargs,
+    ):
+        key = repeat_kv(key, num_key_value_groups)
+        value = repeat_kv(value, num_key_value_groups)
+
+        query = query.contiguous()
+        key = key.contiguous()
+        value = value.contiguous()
+        
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attn_mask=None,
+            dropout_p=dropout,
+            scale=scaling,
+            is_causal=False,
+        )
+        attn_output = attn_output.contiguous()
+        return attn_output
+    model.eval()
+    torch.cuda.empty_cache()  # Manually release memory
+    dataset.disable_qa()
+    print("kv train numel", sum([_.numel() for _ in model.parameters() if _.requires_grad]))
+    optimizer = torch.optim.AdamW([_ for _ in model.parameters() if _.requires_grad], lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
+    basemodel = model.model.model
+    scaling = basemodel.layers[0].scaling
+    num_key_value_groups = basemodel.layers[0].num_key_value_groups
+    from tqdm import tqdm
+    kvcaches = []
+    for data in dataset:
+        with torch.no_grad():
+            input_id = data["input_ids"].unsqueeze(0).to(model.device)
+            len_context = data["len_context"]
+            outputs = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=DistillCache(), use_cache=True)
+            kvcache: DistillCache = outputs.past_key_values
+            for idx in kvcache.query_cache:
+                kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, kvcache.query_cache[idx], kvcache.key_cache[idx][:, :, len_context], kvcache.value_cache[idx][:, :, len_context], 0.0, scaling)
+
+            input_id2 = input_id[:, len_context:]
+            kvcache2: DistillCache = model.forward(input_ids=input_id2, gate_mask=torch.zeros_like(input_id2), past_key_values=DistillCache(), use_cache=True).past_key_values
+            kvcaches.append((kvcache, kvcache2, len_context))
+
+    import random
+    for _ in tqdm(range(kv_epoches*10)):
+        random.shuffle(kvcaches)
+        for kvcache, kvcache2, len_context in kvcaches:
+            if True:
+                memouts = model.forward(input_ids=None, gate_mask=None, past_key_values=kvcache, use_cache=True, output_memout=1)
+                memouts2 = model.forward(input_ids=None, gate_mask=None, past_key_values=kvcache2, use_cache=True, output_memout=-1)
+                memloss = []
+                gateloss = []
+                for layer_idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
+                    # basemodel.layers[layer_idx].self_attn.unset_memproj_numgroup()
+                    memout, vattnout = memouts[layer_idx], kvcache.virtual_attnout_cache[layer_idx]
+                    memloss.append(torch.mean(torch.square(memout - vattnout)))
+                    # basemodel.layers[layer_idx].self_attn.set_memproj_numgroup()
+                    
+                    gateout = memouts2[layer_idx]
+                    postattnout = kvcache2.attnout_cache[layer_idx].transpose(1, 2)
+                    withcontextattnout = kvcache.attnout_cache[layer_idx][:, len_context:].transpose(1, 2)
+                    vattnout = vattnout[:, :, len_context:]
+                    gateloss.append(torch.mean(torch.square(((1-gateout)*postattnout + gateout * vattnout)-withcontextattnout)))
+                    
+                memloss = torch.stack(memloss).mean()
+                gateloss = torch.stack(gateloss).mean()
+                (memloss+gateloss).backward()
+                print(f"mem loss {memloss.item():.3e}, gate loss {gateloss.item():.3e}", flush=True)
                 optimizer.step()
                 optimizer.zero_grad()
     return model, optimizer
