@@ -13,8 +13,8 @@ prepare
 # python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_distill.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.kvmeml3.distill.jsonl \
-    --output_dir models/qwendistill.kvmeml3 \
+    --output_file outputs/subset.kvmeml3.norm.distill.jsonl \
+    --output_dir models/qwendistill.kvmeml3.norm \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \

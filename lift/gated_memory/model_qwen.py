@@ -45,9 +45,9 @@ class GMQwen2Attention(Qwen2Attention):
         self.num_key_value_heads = self.config.num_key_value_heads
         memdim = 2 * self.head_dim
         self.mem_proj = nn.Sequential(
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=True),
+            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=True, tailnorm=True),
             nn.SiLU(inplace=True),
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, memdim, bias=True),
+            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, memdim, bias=True, tailnorm=True),
             nn.SiLU(inplace=True),
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=True),
             )

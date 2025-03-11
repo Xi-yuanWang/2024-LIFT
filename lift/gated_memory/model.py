@@ -21,7 +21,7 @@ class MyRMSNorm(nn.Module):
         return hidden_states.to(input_dtype)
 
 class GroupedLinear(nn.Module):
-    def __init__(self, num_repeat: int, group_size: int, indim: int, outdim: int, bias: bool=True) -> None:
+    def __init__(self, num_repeat: int, group_size: int, indim: int, outdim: int, bias: bool=True, tailnorm: bool=False) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.empty((group_size, indim, outdim)))
         if bias:
@@ -31,6 +31,7 @@ class GroupedLinear(nn.Module):
         self.reset_parameters()
         self.num_repeat = num_repeat
         self.group_size = group_size
+        self.norm = MyRMSNorm() if tailnorm else nn.Identity() 
 
     def reset_parameters(self) -> None:
         # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with

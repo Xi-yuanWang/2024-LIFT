@@ -313,7 +313,7 @@ def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_
     from peft import get_peft_model, LoraConfig, TaskType
     lora_config1 = LoraConfig(
             r=1,
-            target_modules=["lm_head"],
+            target_modules=["layers.63.self_attn.q_proj"],
             task_type=TaskType.CAUSAL_LM,
             lora_alpha=0.0,
             modules_to_save=[f"layers.{i}.self_attn.mem_proj" for i in range(len(model.model.layers))] + [f"layers.{i}.self_attn.gate_proj" for i in range(len(model.model.layers))],
