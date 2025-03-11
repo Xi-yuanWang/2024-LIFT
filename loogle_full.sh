@@ -10,16 +10,16 @@
 #SBATCH --time=24:00:00
 source utils.sh
 prepare
-
+# python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_full.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.kvmem.jsonl \
-    --output_dir models/qwentrain.kvmem \
+    --output_file outputs/subset.kvmeml3.smalllr.jsonl \
+    --output_dir models/qwentrain.kvmeml3 \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \
     --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
-    --model_name_or_path models/LGM0-0-Qwen2.5-32B-Instruct \
+    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0l3-Qwen2.5-32B-Instruct \
     --model_max_length 32000 \
     --block_size 256 \
     --len_segment 31 \
@@ -37,8 +37,8 @@ python scripts/test_loogle_lift_full.py \
     --remove_unused_columns True \
     --report_to none \
     --per_device_train_batch_size 1 \
-    --learning_rate 3e-3 \
-    --weight_decay 1e-1 \
+    --learning_rate 1e-3 \
+    --weight_decay 1e-3 \
     --adam_beta1 0.9 \
     --adam_beta2 0.98 \
     --adam_epsilon 1e-8 \

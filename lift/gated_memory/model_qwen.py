@@ -22,6 +22,8 @@ class GMQwen2Attention(Qwen2Attention):
         self.mem_proj = nn.Sequential(
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=True),
             nn.SiLU(inplace=True),
+            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, memdim, bias=True),
+            nn.SiLU(inplace=True),
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=True),
             )
         gatedim = int(self.head_dim**0.5)
@@ -31,9 +33,8 @@ class GMQwen2Attention(Qwen2Attention):
         self.gate_proj = nn.Sequential(
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, gatedim, bias=False),
             nn.SiLU(inplace=True),
-            tmp,
-            BiasSigmoid()#nn.Sigmoid()#nn.Softplus(beta=20)
-            )
+            tmp)
+            #BiasSigmoid()#nn.Sigmoid()#nn.Softplus(beta=20))
     
     def unset_memproj_numgroup(self):
         for mod in self.mem_proj:
