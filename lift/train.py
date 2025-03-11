@@ -154,7 +154,6 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
         scaling: Optional[float] = None,
         **kwargs,
     ):
-        print(key.shape, value.shape)
         key = repeat_kv(key, num_key_value_groups)
         value = repeat_kv(value, num_key_value_groups)
 
@@ -190,7 +189,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
             outputs = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=DistillCache(), use_cache=True)
             kvcache: DistillCache = outputs.past_key_values
             for idx in kvcache.query_cache:
-                kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, kvcache.query_cache[idx], kvcache.key_cache[idx][:, :, len_context], kvcache.value_cache[idx][:, :, len_context], 0.0, scaling)
+                kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, kvcache.query_cache[idx], kvcache.key_cache[idx][:, :, :len_context], kvcache.value_cache[idx][:, :, :len_context], 0.0, scaling)
 
             input_id2 = input_id[:, len_context:]
             kvcache2: DistillCache = model.forward(input_ids=input_id2, gate_mask=torch.zeros_like(input_id2), past_key_values=DistillCache(), use_cache=True).past_key_values
