@@ -154,6 +154,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
         scaling: Optional[float] = None,
         **kwargs,
     ):
+        print(key.shape, value.shape)
         key = repeat_kv(key, num_key_value_groups)
         value = repeat_kv(value, num_key_value_groups)
 
@@ -174,12 +175,12 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
         return attn_output
     model.eval()
     torch.cuda.empty_cache()  # Manually release memory
-    dataset.disable_qa()
+    #dataset.disable_qa()
     print("kv train numel", sum([_.numel() for _ in model.parameters() if _.requires_grad]))
     optimizer = torch.optim.AdamW([_ for _ in model.parameters() if _.requires_grad], lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
     basemodel = model.model.model
-    scaling = basemodel.layers[0].scaling
-    num_key_value_groups = basemodel.layers[0].num_key_value_groups
+    scaling = basemodel.layers[0].self_attn.scaling
+    num_key_value_groups = basemodel.layers[0].self_attn.num_key_value_groups
     from tqdm import tqdm
     kvcaches = []
     for data in dataset:

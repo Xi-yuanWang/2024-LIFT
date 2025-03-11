@@ -65,7 +65,7 @@ class DistillDataset(Dataset):
             self.data.append({
                 'input_ids': torch.concat((
                     context, 
-                    torch.randint((8192-len_context,), 0, tokenizer.vocab_size + 1)
+                    torch.randint(0, tokenizer.vocab_size + 1, (8192-len_context,))
                     ), dim=0
                     ),
                 'len_context': len_context,
