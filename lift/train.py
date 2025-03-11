@@ -193,12 +193,16 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
 
             input_id2 = input_id[:, len_context:]
             kvcache2: DistillCache = model.forward(input_ids=input_id2, gate_mask=torch.zeros_like(input_id2), past_key_values=DistillCache(), use_cache=True).past_key_values
+            kvcache.cpu()
+            kvcache2.cpu()
             kvcaches.append((kvcache, kvcache2, len_context))
 
     import random
     for _ in tqdm(range(kv_epoches*10)):
         random.shuffle(kvcaches)
         for kvcache, kvcache2, len_context in kvcaches:
+            kvcache.query_to(model.device)
+            kvcache2.query_to(model.device)
             if True:
                 memouts = model.forward(input_ids=None, gate_mask=None, past_key_values=kvcache, use_cache=True, output_memout=1)
                 memouts2 = model.forward(input_ids=None, gate_mask=None, past_key_values=kvcache2, use_cache=True, output_memout=-1)
@@ -207,14 +211,14 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 for layer_idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
                     # basemodel.layers[layer_idx].self_attn.unset_memproj_numgroup()
                     memout, vattnout = memouts[layer_idx], kvcache.virtual_attnout_cache[layer_idx]
-                    memloss.append(torch.mean(torch.square(memout - vattnout)))
+                    memloss.append(torch.mean(torch.square(memout - vattnout.to(memout.device))))
                     # basemodel.layers[layer_idx].self_attn.set_memproj_numgroup()
                     
                     gateout = memouts2[layer_idx]
                     postattnout = kvcache2.attnout_cache[layer_idx].transpose(1, 2)
                     withcontextattnout = kvcache.attnout_cache[layer_idx][:, len_context:].transpose(1, 2)
                     vattnout = vattnout[:, :, len_context:]
-                    gateloss.append(torch.mean(torch.square(((1-gateout)*postattnout + gateout * vattnout)-withcontextattnout)))
+                    gateloss.append(torch.mean(torch.square(((1-gateout)*postattnout.to(gateout.device) + gateout * vattnout.to(gateout.device))-withcontextattnout)))
                     
                 memloss = torch.stack(memloss).mean()
                 gateloss = torch.stack(gateloss).mean()
@@ -222,6 +226,8 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 print(f"mem loss {memloss.item():.3e}, gate loss {gateloss.item():.3e}", flush=True)
                 optimizer.step()
                 optimizer.zero_grad()
+            kvcache.cpu()
+            kvcache2.cpu()
     return model, optimizer
 
 

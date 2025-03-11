@@ -20,6 +20,21 @@ class DistillCache(DynamicCache):
         self.attnout_cache = {}
         self.virtual_attnout_cache = {}
 
+    def cpu(self):
+        for i in range(len(self.key_cache)):
+            self.key_cache[i] = self.key_cache[i].cpu()
+        for i in range(len(self.value_cache)):
+            self.value_cache[i] = self.value_cache[i].cpu()
+        for key in self.query_cache:
+            self.query_cache[key] = self.query_cache[key].cpu()
+        for key in self.attnout_cache:
+            self.attnout_cache[key] = self.attnout_cache[key].cpu()
+        for key in self.virtual_attnout_cache:
+            self.virtual_attnout_cache[key] = self.virtual_attnout_cache[key].cpu()
+    
+    def query_to(self, dev):
+        for key in self.query_cache:
+            self.query_cache[key] = self.query_cache[key].to(dev)
 
 class GMQwen2Attention(Qwen2Attention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
