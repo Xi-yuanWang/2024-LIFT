@@ -319,6 +319,10 @@ def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_
             modules_to_save=[f"layers.{i}.self_attn.mem_proj" for i in range(len(model.model.layers))] + [f"layers.{i}.self_attn.gate_proj" for i in range(len(model.model.layers))],
         )
     model = get_peft_model(model, lora_config1)
+    print("kv train numel", sum([_.numel() for _ in model.parameters() if _.requires_grad]))
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(name, param.shape, param.numel())
     model.save_pretrained(training_args.output_dir, "before_kvmem")
     dataset = DistillDataset(title, context, tokenizer, model_max_length, block_size, len_segment, len_offset)
     model = distilltrain(model, dataset, tokenizer, training_args, kv_epochs, gather_batches)[0]

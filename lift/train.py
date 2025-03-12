@@ -152,7 +152,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
         value: torch.Tensor,
         dropout: float = 0.0,
         scaling: Optional[float] = None,
-        **kwargs,
+        is_causal: Optional[bool] = False,
     ):
         key = repeat_kv(key, num_key_value_groups)
         value = repeat_kv(value, num_key_value_groups)
@@ -168,18 +168,13 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
             attn_mask=None,
             dropout_p=dropout,
             scale=scaling,
-            is_causal=False,
+            is_causal=is_causal,
         )
         attn_output = attn_output.contiguous()
         return attn_output
     model.eval()
     torch.cuda.empty_cache()  # Manually release memory
-    #dataset.disable_qa()
-    print("kv train numel", sum([_.numel() for _ in model.parameters() if _.requires_grad]))
     optimizer = torch.optim.AdamW([_ for _ in model.parameters() if _.requires_grad], lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            print(name)
     basemodel = model.model.model
     scaling = basemodel.layers[0].self_attn.scaling
     num_key_value_groups = basemodel.layers[0].self_attn.num_key_value_groups
@@ -192,7 +187,12 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
             outputs = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=DistillCache(), use_cache=True)
             kvcache: DistillCache = outputs.past_key_values
             for idx in kvcache.query_cache:
-                kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, kvcache.query_cache[idx], kvcache.key_cache[idx][:, :, :len_context], kvcache.value_cache[idx][:, :, :len_context], 0.0, scaling)
+                q, k, v = kvcache.query_cache[idx], kvcache.key_cache[idx], kvcache.value_cache[idx]
+                k_lower = k[:, :, :len_context]
+                v_lower = v[:, :, :len_context]
+                print(q.shape, k.shape, v.shape)
+                kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q, k_lower, v_lower, 0.0, scaling)
+                print(sdpa_attention_forward(num_key_value_groups, q, k, v, 0.0, scaling, True).transpose(1, 2) - kvcache.attnout_cache[idx])
 
             input_id2 = input_id[:, len_context:]
             kvcache2: DistillCache = model.forward(input_ids=input_id2, gate_mask=torch.zeros_like(input_id2), past_key_values=DistillCache(), use_cache=True).past_key_values
