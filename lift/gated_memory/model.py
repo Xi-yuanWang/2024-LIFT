@@ -20,6 +20,23 @@ class MyRMSNorm(nn.Module):
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
         return hidden_states.to(input_dtype)
 
+class MyLayerNorm(nn.Module):
+    def __init__(self, eps=1e-6):
+        """
+        LlamaRMSNorm is equivalent to T5LayerNorm
+        """
+        super().__init__()
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        hidden_states = hidden_states - hidden_states.mean(-1, keepdim=True)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        return hidden_states.to(input_dtype)
+
+
 class GroupedLinear(nn.Module):
     def __init__(self, num_repeat: int, group_size: int, indim: int, outdim: int, bias: bool=True, tailnorm: bool=False) -> None:
         super().__init__()
@@ -31,7 +48,7 @@ class GroupedLinear(nn.Module):
         self.reset_parameters()
         self.num_repeat = num_repeat
         self.group_size = group_size
-        self.norm = MyRMSNorm() if tailnorm else nn.Identity() 
+        self.norm = MyLayerNorm() if tailnorm else nn.Identity() 
 
     def reset_parameters(self) -> None:
         # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with

@@ -190,9 +190,9 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 q, k, v = kvcache.query_cache[idx], kvcache.key_cache[idx], kvcache.value_cache[idx]
                 k_lower = k[:, :, :len_context]
                 v_lower = v[:, :, :len_context]
-                print(q.shape, k.shape, v.shape)
-                kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q, k_lower, v_lower, 0.0, scaling)
-                print(sdpa_attention_forward(num_key_value_groups, q, k, v, 0.0, scaling, True).transpose(1, 2) - kvcache.attnout_cache[idx])
+                #print(q.shape, k.shape, v.shape)
+                kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q, k_lower, v_lower, 0.0, scaling, False)
+                #print(torch.max((sdpa_attention_forward(num_key_value_groups, q, k, v, 0.0, scaling, True).transpose(1, 2) - kvcache.attnout_cache[idx]).abs()))
 
             input_id2 = input_id[:, len_context:]
             kvcache2: DistillCache = model.forward(input_ids=input_id2, gate_mask=torch.zeros_like(input_id2), past_key_values=DistillCache(), use_cache=True).past_key_values
@@ -214,26 +214,37 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 for layer_idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
                     # basemodel.layers[layer_idx].self_attn.unset_memproj_numgroup()
                     memout, vattnout = memouts[layer_idx], kvcache.virtual_attnout_cache[layer_idx]
+                    vattnout = vattnout.to(memout.device)
                     # print(memout.shape, vattnout.shape)
-                    memloss.append(torch.mean(torch.square(memout - vattnout.to(memout.device)).sum(dim=-1)))
+                    tmemloss = (memout - vattnout).norm(dim=-1).mean()
+                    tmemloss.backward()
+                    memloss.append(tmemloss.detach())
                     # basemodel.layers[layer_idx].self_attn.set_memproj_numgroup()
                     
-                    gateout = memouts2[layer_idx]
-                    postattnout = kvcache2.attnout_cache[layer_idx].transpose(1, 2)
-                    withcontextattnout = kvcache.attnout_cache[layer_idx][:, len_context:].transpose(1, 2)
-                    vattnout = vattnout[:, :, len_context:]
+                    gateout = memouts2[layer_idx]#.squeeze()
+                    postattnout = kvcache2.attnout_cache[layer_idx].to(gateout.device).transpose(1, 2)#.squeeze()
+                    attnout = kvcache.attnout_cache[layer_idx][:, len_context:].to(gateout.device).transpose(1, 2)#.squeeze()
+                    vattnout = vattnout[:, :, len_context:].to(gateout.device)#.squeeze()
+                    #print(gateout.shape, postattnout.shape, attnout.shape, vattnout.shape)
+                    #ratio = (attnout-postattnout).abs().sum(dim=-1)/(vattnout-postattnout).abs().sum(dim=-1)
+                    #ratio = ratio
+                    #print(gateout.squeeze(), ratio.squeeze())
+                    #print("layer", layer_idx, attnout.shape, ratio.mean(dim=-1).reshape(8, 5).tolist(), ratio.std(dim=-1).reshape(8, 5).tolist())
                     # print(gateout.shape, postattnout.shape, withcontextattnout.shape, vattnout.shape)
-                    gateloss.append(torch.mean(torch.square(((1-gateout)*postattnout.to(gateout.device) + gateout * vattnout.to(gateout.device))-withcontextattnout.to(gateout.device)).sum(dim=-1)))
+                    deltapred = gateout * (vattnout-postattnout)
+                    postdelta = attnout - postattnout
+                    tgateloss = (postdelta-deltapred).norm(dim=-1).mean()
+                    tgateloss.backward()
+                    gateloss.append(tgateloss.detach())
                     
                 memloss = torch.stack(memloss).mean()
                 gateloss = torch.stack(gateloss).mean()
-                (memloss+gateloss).backward()
                 print(f"mem loss {memloss.item():.3e}, gate loss {gateloss.item():.3e}", flush=True)
                 optimizer.step()
                 optimizer.zero_grad()
             kvcache.cpu()
             kvcache2.cpu()  
-            #torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
     return model, optimizer
 
 

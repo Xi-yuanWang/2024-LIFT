@@ -113,7 +113,7 @@ class LooGLEDataset(ContextDataset):
         input_ids = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(generator.device)
         mask_attention = torch.ones_like(input_ids)
         terminators = [self.tokenizer.eos_token_id, self.tokenizer.convert_tokens_to_ids("<|eot_id|>")]
-        for _ in range(5):
+        for _ in range(1):
             outputs = generator.generate(
                 input_ids=input_ids,
                 attention_mask=mask_attention.to(generator.device),

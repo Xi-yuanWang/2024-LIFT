@@ -43,34 +43,25 @@ class GMQwen2Attention(Qwen2Attention):
         super().__init__(config, layer_idx)
         assert self.is_causal, "implemented only for casual LLM"
         self.num_key_value_heads = self.config.num_key_value_heads
-        memdim = 2 * self.head_dim
+        memdim = 4 * self.head_dim
         self.mem_proj = nn.Sequential(
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=True, tailnorm=True),
+            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=True, tailnorm=False),
             nn.SiLU(inplace=True),
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, memdim, bias=True, tailnorm=True),
-            nn.SiLU(inplace=True),
+            #GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, memdim, bias=True, tailnorm=True),
+            #nn.SiLU(inplace=True),
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=True),
             )
-        gatedim = int(self.head_dim**0.5)
-        tmp = GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, gatedim, 1, bias=False)
-        with torch.no_grad():
-            tmp.weight.fill_(0.0)
+        gatedim = 4 * int(self.head_dim**0.5)
+        tmp = GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, gatedim, 1, bias=True)
+        #with torch.no_grad():
+        #    tmp.weight.fill_(0.0)
         self.gate_proj = nn.Sequential(
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, gatedim, bias=False),
+            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, gatedim, bias=True, tailnorm=True),
             nn.SiLU(inplace=True),
-            tmp)
+            tmp, nn.Sigmoid())
+            #BiasSigmoid())
             #BiasSigmoid()#nn.Sigmoid()#nn.Softplus(beta=20))
     
-    def unset_memproj_numgroup(self):
-        for mod in self.mem_proj:
-            if isinstance(mod, GroupedLinear):
-                mod.num_repeat = 1
-    
-    def set_memproj_numgroup(self):
-        for mod in self.mem_proj:
-            if isinstance(mod, GroupedLinear):
-                mod.num_repeat = self.num_key_value_groups
-
     def forward(
         self,
         hidden_states: torch.Tensor,

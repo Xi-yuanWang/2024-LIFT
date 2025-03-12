@@ -13,16 +13,16 @@ prepare
 # python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_distill.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.kvmeml3.norm.distill.single.jsonl \
-    --output_dir models/qwendistill.kvmeml3.norm.single \
+    --output_file outputs/subset.kvmemx4.norm.distill.single.jsonl \
+    --output_dir models/qwendistill.kvmemx4.norm.single \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \
     --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
-    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0l3-Qwen2.5-32B-Instruct \
+    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0x4-Qwen2.5-32B-Instruct \
     --model_max_length 32000 \
     --block_size 256 \
-    --len_segment 15 \
+    --len_segment 16 \
     --len_offset 4 \
     --use_gated_memory True \
     --load_in_4bit True \
@@ -37,7 +37,7 @@ python scripts/test_loogle_lift_distill.py \
     --remove_unused_columns True \
     --report_to none \
     --per_device_train_batch_size 1 \
-    --learning_rate 1e-3 \
+    --learning_rate 3e-3 \
     --weight_decay 1e-3 \
     --adam_beta1 0.9 \
     --adam_beta2 0.98 \
