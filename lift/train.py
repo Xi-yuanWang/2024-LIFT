@@ -214,6 +214,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 for layer_idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
                     # basemodel.layers[layer_idx].self_attn.unset_memproj_numgroup()
                     memout, vattnout = memouts[layer_idx], kvcache.virtual_attnout_cache[layer_idx]
+                    # print(memout.shape, vattnout.shape)
                     memloss.append(torch.mean(torch.square(memout - vattnout.to(memout.device)).sum(dim=-1)))
                     # basemodel.layers[layer_idx].self_attn.set_memproj_numgroup()
                     
@@ -221,6 +222,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                     postattnout = kvcache2.attnout_cache[layer_idx].transpose(1, 2)
                     withcontextattnout = kvcache.attnout_cache[layer_idx][:, len_context:].transpose(1, 2)
                     vattnout = vattnout[:, :, len_context:]
+                    # print(gateout.shape, postattnout.shape, withcontextattnout.shape, vattnout.shape)
                     gateloss.append(torch.mean(torch.square(((1-gateout)*postattnout.to(gateout.device) + gateout * vattnout.to(gateout.device))-withcontextattnout.to(gateout.device)).sum(dim=-1)))
                     
                 memloss = torch.stack(memloss).mean()

@@ -13,8 +13,8 @@ prepare
 # python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_distill.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.kvmeml3.norm.distill.jsonl \
-    --output_dir models/qwendistill.kvmeml3.norm \
+    --output_file outputs/subset.kvmeml3.norm.distill.single.jsonl \
+    --output_dir models/qwendistill.kvmeml3.norm.single \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \
@@ -22,7 +22,7 @@ python scripts/test_loogle_lift_distill.py \
     --model_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0l3-Qwen2.5-32B-Instruct \
     --model_max_length 32000 \
     --block_size 256 \
-    --len_segment 31 \
+    --len_segment 15 \
     --len_offset 4 \
     --use_gated_memory True \
     --load_in_4bit True \
@@ -33,7 +33,7 @@ python scripts/test_loogle_lift_distill.py \
     --gather_batches False \
     --involve_qa_epochs 0 \
     --num_train_epochs 10 \
-    --kv_epochs 30 \
+    --kv_epochs 100 \
     --remove_unused_columns True \
     --report_to none \
     --per_device_train_batch_size 1 \
