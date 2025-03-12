@@ -9,7 +9,7 @@ from typing import Callable, List, Optional, Tuple, Union
 import torch
 from torch import nn
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Config, Cache, FlashAttentionKwargs, Unpack, Qwen2Attention, apply_rotary_pos_emb, eager_attention_forward, logger, ALL_ATTENTION_FUNCTIONS, Qwen2MLP, Qwen2RMSNorm, Qwen2DecoderLayer, PreTrainedModel, Qwen2RotaryEmbedding, BaseModelOutputWithPast, DynamicCache, StaticCache, SlidingWindowCache, AttentionMaskConverter, LossKwargs, GenerationMixin, CausalLMOutputWithPast
-from lift.gated_memory.model import GroupedLinear, MyRMSNorm, BiasScale, BiasSigmoid
+from lift.gated_memory.model import GroupedLinear, MyRMSNorm, BiasScale, BiasSigmoid, MyLayerNorm
 
 
 class DistillCache(DynamicCache):
@@ -36,6 +36,16 @@ class DistillCache(DynamicCache):
         for key in self.query_cache:
             self.query_cache[key] = self.query_cache[key].to(dev)
 
+class ResSequential(nn.Module):
+    def __init__(self, modulelist) -> None:
+        super().__init__()
+        self.mods = nn.ModuleList(modulelist)
+    
+    def forward(self, x):
+        for mod in self.mods:
+            x = x + mod(x)
+        return x
+
 class GMQwen2Attention(Qwen2Attention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
@@ -43,6 +53,7 @@ class GMQwen2Attention(Qwen2Attention):
         super().__init__(config, layer_idx)
         assert self.is_causal, "implemented only for casual LLM"
         self.num_key_value_heads = self.config.num_key_value_heads
+        '''
         memdim = 4 * self.head_dim
         self.mem_proj = nn.Sequential(
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=True, tailnorm=False),
@@ -50,6 +61,11 @@ class GMQwen2Attention(Qwen2Attention):
             #GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, memdim, bias=True, tailnorm=True),
             #nn.SiLU(inplace=True),
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=True),
+            )
+        '''
+        self.mem_proj = nn.Sequential(
+            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False),
+            ResSequential([nn.Sequential(MyLayerNorm(), nn.SiLU(inplace=True), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=False, tailnorm=False)) for _ in range(7)])
             )
         gatedim = 4 * int(self.head_dim**0.5)
         tmp = GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, gatedim, 1, bias=True)

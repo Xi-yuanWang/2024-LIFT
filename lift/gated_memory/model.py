@@ -70,7 +70,7 @@ class GroupedLinear(nn.Module):
         else:
             x = x @ self.weight.unsqueeze(1) + self.bias.unsqueeze(1).unsqueeze(1)
         x = x.flatten(1, 2)
-        return x
+        return self.norm(x)
 
 class BiasSigmoid(nn.Module):
 
