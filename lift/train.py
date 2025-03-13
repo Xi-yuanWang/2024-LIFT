@@ -191,97 +191,62 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 q, k, v = kvcache.query_cache[idx], kvcache.key_cache[idx], kvcache.value_cache[idx]
                 k_lower = k[:, :, :len_context]#k[:, :, :len_context]
                 v_lower = v[:, :, :len_context]
-                #print(q.shape, k.shape, v.shape)
                 kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q, k_lower, v_lower, 0.0, scaling, False)
-                
-                #print(torch.max((sdpa_attention_forward(num_key_value_groups, q, k, v, 0.0, scaling, True).transpose(1, 2) - kvcache.attnout_cache[idx]).abs()))
-
-            #input_id2 = input_id[:, len_context:]
-            #kvcache2: DistillCache = model.forward(input_ids=input_id2, gate_mask=torch.zeros_like(input_id2), past_key_values=DistillCache(), use_cache=True).past_key_values
+            
+            input_id2 = input_id[:, len_context:]
+            kvcache2: DistillCache = model.forward(input_ids=input_id2, gate_mask=torch.zeros_like(input_id2), past_key_values=DistillCache(), use_cache=True).past_key_values
             kvcache.cpu()
-            #kvcache2.cpu()
-            kvcache2 = None
+            kvcache2.cpu()
             kvcaches.append((kvcache, kvcache2, len_context))
         torch.cuda.empty_cache()
     import random
     for _ in tqdm(range(kv_epoches)):
         random.shuffle(kvcaches)
         for kvcache, kvcache2, len_context in kvcaches:
-            #kvcache.query_to(model.device)
-            #kvcache2.query_to(model.device)
             if True:
-                #memouts = model.forward(input_ids=None, gate_mask=None, past_key_values=kvcache, use_cache=True, output_memout=1)
-                #memouts2 = model.forward(input_ids=None, gate_mask=None, past_key_values=kvcache2, use_cache=True, output_memout=-1)
-                memloss = []
-                memmagloss = []
-                gateloss = []
+                meml1loss = []
+                memcosloss = []
+                gatel1loss = []
+                gatecosloss = []
                 for layer_idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
-                    # basemodel.layers[layer_idx].self_attn.unset_memproj_numgroup()
-                    q = kvcache.query_cache[layer_idx].to(model.device)
-                    vattnout = kvcache.virtual_attnout_cache[layer_idx]
-                    vattnout = vattnout.to(model.device)
-                    #qf = q.unflatten(1, (8, 5))
-                    #vaf = vattnout.unflatten(1, (8, 5))
-                    #q = (qf - qf.mean(dim=[0, 2, 3], keepdims=True))/(1e-2 + qf.std(dim=[0, 2, 3], keepdims=True))
-                    #q = q.flatten(1, 2)
-                    #vattnout =  (vaf - vaf.mean(dim=[0, 2, 3], keepdims=True))/(1e-2 + vaf.std(dim=[0, 2, 3], keepdims=True))
-                    #vattnout = vattnout.flatten(1, 2)
-                    '''
-                    k = kvcache.key_cache[layer_idx][:, :, :len_context].to(model.device)
-                    v = kvcache.value_cache[layer_idx][:, :, :len_context].to(model.device)
-                    q = q.unflatten(1, (8, 5))
-                    k = k.unflatten(1, (8, 1))
-                    v = v.unflatten(1, (8, 1))
-                    simout = torch.softmax(scaling*(q @ k.transpose(-1, -2)), dim=-1) @ v
-                    print(kvcache.virtual_attnout_cache[layer_idx].to(model.device).norm(dim=-1).mean(), (simout.flatten(1, 2) -  kvcache.virtual_attnout_cache[layer_idx].to(model.device)).norm(dim=-1).mean())
-                    continue
-                    '''
-                    memout = basemodel.layers[layer_idx].self_attn.mem_proj(q)
+                    q = kvcache.query_cache[layer_idx].to(model.device, non_blocking=True)
+                    vattnout = kvcache.virtual_attnout_cache[layer_idx].to(model.device, non_blocking=True)
+                    memout = basemodel.layers[layer_idx].self_attn.mem_proj(q, non_blocking=True)
+                    tmeml1loss = (memout - vattnout).abs().mean()
+                    tmemcosloss = 1 - torch.nn.CosineSimilarity(dim=-1)(memout, vattnout).mean()
+                    (tmeml1loss + tmemcosloss).backward()
                     
-                    # vattnoutf = vattnout.flatten(0, -2)
+                    meml1loss.append(tmeml1loss.detach())
+                    memcosloss.append(tmemcosloss.detach())
 
-                    #memout = memout.unflatten(1, (8, 5))[:, :, 0]
-                    #vattnout = vattnout.unflatten(1, (8, 5))[:, :, 0]
+                    q = q[:, :, len_context:]
+                    k = kvcache.key_cache[layer_idx][:, :, len_context:].to(model.device, non_blocking=True)
+                    postattnout = kvcache2.attnout_cache[layer_idx].transpose(1, 2).to(model.device, non_blocking=True)
+                    attnout = kvcache.attnout_cache[layer_idx][:, len_context:].transpose(1, 2).to(model.device, non_blocking=True)
+                    vattnout = vattnout[:, :, len_context:]
                     
-                    l1loss = (memout - vattnout).abs().mean()
-                    #loss.backward()
-                    # print(memout.shape, vattnout.shape)
-                    #with torch.no_grad():
-                    tmemloss = 1 - torch.nn.CosineSimilarity(dim=-1)(memout, vattnout).mean()#(memout - vattnout).norm(dim=-1).mean()
-                    (l1loss + tmemloss).backward()
-                    #with torch.no_grad():
-                    #    tmemmagloss = ((memout/(memout.norm(dim=-1, keepdim=True)+1e-3)) * (vattnout.norm(dim=-1, keepdim=True)) - vattnout).norm(dim=-1).mean()/vattnout.norm(dim=-1).mean()
-                    memloss.append(tmemloss.detach())
-                    memmagloss.append(l1loss.detach())
+                    gateout = basemodel.layers[layer_idx].self_attn.gate_proj(q, k)
                     
-                    '''
-                    gateout = basemodel.layers[layer_idx].self_attn.gate_proj(kvcache2.query_cache[layer_idx].to(model.device))#memouts2[layer_idx]#.squeeze()
-                    postattnout = kvcache2.attnout_cache[layer_idx].to(gateout.device).transpose(1, 2)#.squeeze()
-                    attnout = kvcache.attnout_cache[layer_idx][:, len_context:].to(gateout.device).transpose(1, 2)#.squeeze()
-                    vattnout = vattnout[:, :, len_context:].to(gateout.device)#.squeeze()
-                    #print(gateout.shape, postattnout.shape, attnout.shape, vattnout.shape)
-                    #ratio = (attnout-postattnout).abs().sum(dim=-1)/(vattnout-postattnout).abs().sum(dim=-1)
-                    #ratio = ratio
-                    #print(gateout.squeeze(), ratio.squeeze())
-                    #print("layer", layer_idx, attnout.shape, ratio.mean(dim=-1).reshape(8, 5).tolist(), ratio.std(dim=-1).reshape(8, 5).tolist())
-                    # print(gateout.shape, postattnout.shape, withcontextattnout.shape, vattnout.shape)
-                    deltapred = gateout * (vattnout-postattnout)
-                    postdelta = attnout - postattnout
-                    tgateloss = (postdelta-deltapred).norm(dim=-1).mean()
-                    tgateloss.backward()
-                    gateloss.append(tgateloss.detach())
-                    '''
-                memloss = torch.stack(memloss)#.mean()
-                memmagloss = torch.stack(memmagloss)
-                print("cos", memloss.cpu().tolist(), flush=True)
-                print("mse", memmagloss.cpu().tolist(), flush=True)
-                gateloss = 0.0#torch.stack(gateloss).mean()
-                #print(f"mem loss {memloss.item():.3e}, gate loss {gateloss:.3e}", flush=True)
+                    predout = postattnout + gateout * (vattnout-postattnout)
+                    tgatel1loss = (predout-attnout).abs().mean()
+                    tgatecosloss = 1 - torch.nn.CosineSimilarity(dim=-1)(predout, attnout).mean()
+                    (tgatel1loss + tgatecosloss).backward()
+                    gatel1loss.append(tgatel1loss.detach())
+                    gatecosloss.append(tgatecosloss.detach())
+                    
+                meml1loss = torch.stack(meml1loss)
+                memcosloss = torch.stack(memcosloss)
+                gatel1loss = torch.stack(gatel1loss)
+                gatecosloss = torch.stack(gatecosloss)
+                print("cos mem", memcosloss.cpu().tolist())
+                print("cos gate", gatecosloss.cpu().tolist())
+                print("l1 mem", meml1loss.cpu().tolist())
+                print("l1 gate", gatel1loss.cpu().tolist(), flush=True)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
             kvcache.cpu()
-            #kvcache2.cpu()  
+            kvcache2.cpu()  
             torch.cuda.empty_cache()
     return model, optimizer
 

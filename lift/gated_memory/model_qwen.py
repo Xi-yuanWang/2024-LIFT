@@ -58,6 +58,34 @@ class MemGLU(nn.Module):
             x = x + self.proj1[i](x) * self.proj2[i](x)
         return x
 
+
+class GLUGate(nn.Module):
+    def __init__(self, num_layer: int, scaling: float, num_key_value_groups: int, num_key_value_heads: int, *linargs, **linkwargs):
+        super().__init__()
+        self.scaling = scaling
+        self.num_key_value_groups = num_key_value_groups
+        self.num_key_value_heads = num_key_value_heads
+        self.scaling = scaling
+        self.head_dim = linargs[0]
+        glu = MemGLU(num_layer, num_key_value_groups, num_key_value_heads, *linargs, **linkwargs)
+        self.proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 1, bias=True))
+        
+    
+    def forward(self, queries: torch.Tensor, keys: torch.Tensor):
+        k = keys.unflatten(1, (self.num_key_value_heads, 1))
+        q = queries.unflatten(1, (self.num_key_value_heads, self.num_key_value_groups))
+        attn_weights = ((q @ k.transpose(-1, -2)) * self.scaling).flatten(1, 2)
+        print(k.shape, q.shape)
+        if queries.shape[-2] > 1:
+            causal_mask = torch.tril(torch.ones(*attn_weights.shape[-2:], dtype=torch.bool, device=attn_weights.device))[None, None, :, :]
+            causal_mask = causal_mask.expand(*attn_weights.shape)
+            attn_weights = attn_weights.masked_fill(~causal_mask, -torch.inf)
+        post_sum = torch.logsumexp(attn_weights, dim=-1, keepdim=True).unsqueeze(-1)
+        # post_sum = torch.log(torch.sum(torch.exp(attn_weights), dim=-1).unsqueeze(-1))
+        memgate = self.proj(queries)
+        # print('!' * 10, torch.mean(post_sum), '\n')
+        return nn.functional.sigmoid(memgate - post_sum)
+
 class GMQwen2Attention(Qwen2Attention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
@@ -65,39 +93,10 @@ class GMQwen2Attention(Qwen2Attention):
         super().__init__(config, layer_idx)
         assert self.is_causal, "implemented only for casual LLM"
         self.num_key_value_heads = self.config.num_key_value_heads
-        '''
-        memdim = 4 * self.head_dim
-        self.mem_proj = nn.Sequential(
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=True, tailnorm=False),
-            nn.SiLU(inplace=True),
-            #GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, memdim, bias=True, tailnorm=True),
-            #nn.SiLU(inplace=True),
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=True),
-            )
-        '''
-        '''
-        self.mem_proj = nn.Sequential(
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False),
-            ResSequential([nn.Sequential(MyLayerNorm(), nn.SiLU(inplace=True), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=False, tailnorm=False)) for _ in range(7)])
-            )# MyLayerNorm(), nn.SiLU(inplace=True),
-        '''
-        '''
-        self.mem_proj = nn.Sequential(ResSequential([nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False), MyLayerNorm(), nn.SiLU(inplace=True)) for _ in range(7)]), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False))
-        '''
-        glu = MemGLU(3, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
+        glu = MemGLU(4, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
         self.mem_proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
-        
-        gatedim = 4 * int(self.head_dim**0.5)
-        tmp = GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, gatedim, 1, bias=True)
-        #with torch.no_grad():
-        #    tmp.weight.fill_(0.0)
-        self.gate_proj = nn.Sequential(
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, gatedim, bias=True, tailnorm=True),
-            nn.SiLU(inplace=True),
-            tmp, nn.Sigmoid())
-            #BiasSigmoid())
-            #BiasSigmoid()#nn.Sigmoid()#nn.Softplus(beta=20))
-    
+        self.gate_proj = GLUGate(2, self.scaling, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=True)
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -137,7 +136,7 @@ class GMQwen2Attention(Qwen2Attention):
         if isinstance(past_key_value, DistillCache):
             past_key_value.query_cache[self.layer_idx] = query_states
 
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
+        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states, key_states)
 
         sliding_window = None
         if (

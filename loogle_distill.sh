@@ -10,7 +10,7 @@
 #SBATCH --time=24:00:00
 source utils.sh
 prepare
-#python lift/gated_memory/utils.py
+python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_distill.py \
     --input_file shortdep_qa.subset.jsonl \
     --output_file outputs/subset.GLU.distill.jsonl \
@@ -19,7 +19,7 @@ python scripts/test_loogle_lift_distill.py \
     --num_syn_qa 0 \
     --title_option 1 \
     --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
-    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0GLU-Qwen2.5-32B-Instruct \
+    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0GLUGLUg2m4-Qwen2.5-32B-Instruct \
     --model_max_length 32000 \
     --block_size 256 \
     --len_segment 16 \
