@@ -58,7 +58,7 @@ class DistillDataset(Dataset):
         prompt = LIFT_ICL_PROMPT.format(title=title)
         prompt = self.tokenizer(prompt, add_special_tokens=False)['input_ids']
 
-        context = torch.tensor(prompt + input_ids, dtype=torch.long)
+        context = torch.tensor(prompt + input_ids, dtype=torch.long)#[:1]
         len_context = len(context)
         self.data = []
         for _ in range(1):

@@ -63,10 +63,14 @@ class GMQwen2Attention(Qwen2Attention):
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=True),
             )
         '''
+        
         self.mem_proj = nn.Sequential(
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False),
             ResSequential([nn.Sequential(MyLayerNorm(), nn.SiLU(inplace=True), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=False, tailnorm=False)) for _ in range(7)])
-            )
+            )# MyLayerNorm(), nn.SiLU(inplace=True),
+        '''
+        self.mem_proj = nn.Sequential(ResSequential([nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False), MyLayerNorm(), nn.SiLU(inplace=True)) for _ in range(7)]), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False))
+        '''
         gatedim = 4 * int(self.head_dim**0.5)
         tmp = GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, gatedim, 1, bias=True)
         #with torch.no_grad():

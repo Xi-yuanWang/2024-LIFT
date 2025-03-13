@@ -160,7 +160,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
         query = query.contiguous()
         key = key.contiguous()
         value = value.contiguous()
-        
+        assert not is_causal 
         attn_output = torch.nn.functional.scaled_dot_product_attention(
             query,
             key,
@@ -186,42 +186,68 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
             len_context = data["len_context"]
             outputs = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=DistillCache(), use_cache=True)
             kvcache: DistillCache = outputs.past_key_values
-            for idx in kvcache.query_cache:
+            for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):#kvcache.query_cache:
                 q, k, v = kvcache.query_cache[idx], kvcache.key_cache[idx], kvcache.value_cache[idx]
-                k_lower = k[:, :, :len_context]
+                k_lower = k[:, :, :len_context]#k[:, :, :len_context]
                 v_lower = v[:, :, :len_context]
                 #print(q.shape, k.shape, v.shape)
                 kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q, k_lower, v_lower, 0.0, scaling, False)
+                
                 #print(torch.max((sdpa_attention_forward(num_key_value_groups, q, k, v, 0.0, scaling, True).transpose(1, 2) - kvcache.attnout_cache[idx]).abs()))
 
             input_id2 = input_id[:, len_context:]
-            kvcache2: DistillCache = model.forward(input_ids=input_id2, gate_mask=torch.zeros_like(input_id2), past_key_values=DistillCache(), use_cache=True).past_key_values
+            #kvcache2: DistillCache = model.forward(input_ids=input_id2, gate_mask=torch.zeros_like(input_id2), past_key_values=DistillCache(), use_cache=True).past_key_values
             kvcache.cpu()
-            kvcache2.cpu()
+            #kvcache2.cpu()
+            kvcache2 = None
             kvcaches.append((kvcache, kvcache2, len_context))
         torch.cuda.empty_cache()
     import random
     for _ in tqdm(range(kv_epoches*10)):
-        random.shuffle(kvcaches)
+        # random.shuffle(kvcaches)
         for kvcache, kvcache2, len_context in kvcaches:
-            kvcache.query_to(model.device)
-            kvcache2.query_to(model.device)
+            #kvcache.query_to(model.device)
+            #kvcache2.query_to(model.device)
             if True:
-                memouts = model.forward(input_ids=None, gate_mask=None, past_key_values=kvcache, use_cache=True, output_memout=1)
-                memouts2 = model.forward(input_ids=None, gate_mask=None, past_key_values=kvcache2, use_cache=True, output_memout=-1)
+                #memouts = model.forward(input_ids=None, gate_mask=None, past_key_values=kvcache, use_cache=True, output_memout=1)
+                #memouts2 = model.forward(input_ids=None, gate_mask=None, past_key_values=kvcache2, use_cache=True, output_memout=-1)
                 memloss = []
                 gateloss = []
                 for layer_idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
                     # basemodel.layers[layer_idx].self_attn.unset_memproj_numgroup()
-                    memout, vattnout = memouts[layer_idx], kvcache.virtual_attnout_cache[layer_idx]
-                    vattnout = vattnout.to(memout.device)
+                    q = kvcache.query_cache[layer_idx].to(model.device)
+                    vattnout = kvcache.virtual_attnout_cache[layer_idx]
+                    vattnout = vattnout.to(model.device)
+                    #qf = q.unflatten(1, (8, 5))
+                    #vaf = vattnout.unflatten(1, (8, 5))
+                    #q = (qf - qf.mean(dim=[0, 2, 3], keepdims=True))/(1e-2 + qf.std(dim=[0, 2, 3], keepdims=True))
+                    #q = q.flatten(1, 2)
+                    #vattnout =  (vaf - vaf.mean(dim=[0, 2, 3], keepdims=True))/(1e-2 + vaf.std(dim=[0, 2, 3], keepdims=True))
+                    #vattnout = vattnout.flatten(1, 2)
+                    '''
+                    k = kvcache.key_cache[layer_idx][:, :, :len_context].to(model.device)
+                    v = kvcache.value_cache[layer_idx][:, :, :len_context].to(model.device)
+                    q = q.unflatten(1, (8, 5))
+                    k = k.unflatten(1, (8, 1))
+                    v = v.unflatten(1, (8, 1))
+                    simout = torch.softmax(scaling*(q @ k.transpose(-1, -2)), dim=-1) @ v
+                    print(kvcache.virtual_attnout_cache[layer_idx].to(model.device).norm(dim=-1).mean(), (simout.flatten(1, 2) -  kvcache.virtual_attnout_cache[layer_idx].to(model.device)).norm(dim=-1).mean())
+                    continue
+                    '''
+                    memout = basemodel.layers[layer_idx].self_attn.mem_proj(q)
+                    
+                    # vattnoutf = vattnout.flatten(0, -2)
+
+                    #memout = memout.unflatten(1, (8, 5))[:, :, 0]
+                    #vattnout = vattnout.unflatten(1, (8, 5))[:, :, 0]
+                    
                     # print(memout.shape, vattnout.shape)
-                    tmemloss = (memout - vattnout).norm(dim=-1).mean()
+                    tmemloss = 1 - torch.nn.CosineSimilarity(dim=-1)(memout, vattnout).mean()#(memout - vattnout).norm(dim=-1).mean()
                     tmemloss.backward()
                     memloss.append(tmemloss.detach())
                     # basemodel.layers[layer_idx].self_attn.set_memproj_numgroup()
-                    
-                    gateout = memouts2[layer_idx]#.squeeze()
+                    '''
+                    gateout = basemodel.layers[layer_idx].self_attn.gate_proj(kvcache2.query_cache[layer_idx].to(model.device))#memouts2[layer_idx]#.squeeze()
                     postattnout = kvcache2.attnout_cache[layer_idx].to(gateout.device).transpose(1, 2)#.squeeze()
                     attnout = kvcache.attnout_cache[layer_idx][:, len_context:].to(gateout.device).transpose(1, 2)#.squeeze()
                     vattnout = vattnout[:, :, len_context:].to(gateout.device)#.squeeze()
@@ -236,14 +262,15 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                     tgateloss = (postdelta-deltapred).norm(dim=-1).mean()
                     tgateloss.backward()
                     gateloss.append(tgateloss.detach())
-                    
-                memloss = torch.stack(memloss).mean()
-                gateloss = torch.stack(gateloss).mean()
-                print(f"mem loss {memloss.item():.3e}, gate loss {gateloss.item():.3e}", flush=True)
+                    '''
+                memloss = torch.stack(memloss)#.mean()
+                print(memloss.cpu().tolist(), flush=True)
+                gateloss = 0.0#torch.stack(gateloss).mean()
+                #print(f"mem loss {memloss.item():.3e}, gate loss {gateloss:.3e}", flush=True)
                 optimizer.step()
                 optimizer.zero_grad()
             kvcache.cpu()
-            kvcache2.cpu()  
+            #kvcache2.cpu()  
             torch.cuda.empty_cache()
     return model, optimizer
 
