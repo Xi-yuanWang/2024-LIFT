@@ -10,11 +10,11 @@
 #SBATCH --time=24:00:00
 source utils.sh
 prepare
-python lift/gated_memory/utils.py
+#python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_distill.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.kvmemx4.norm.distill.single.jsonl \
-    --output_dir models/qwendistill.kvmemx4.norm.single \
+    --output_file outputs/subset.GLU.distill.jsonl \
+    --output_dir models/qwendistill.GLU \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \

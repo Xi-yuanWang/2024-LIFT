@@ -61,11 +61,11 @@ class DistillDataset(Dataset):
         context = torch.tensor(prompt + input_ids, dtype=torch.long)#[:1]
         len_context = len(context)
         self.data = []
-        for _ in range(1):
+        for _ in range(5):
             self.data.append({
                 'input_ids': torch.concat((
                     context, 
-                    torch.randint(0, tokenizer.vocab_size + 1, (1,))#(6144-len_context,))
+                    torch.randint(0, tokenizer.vocab_size + 1, (6144-len_context,))
                     ), dim=0
                     ),
                 'len_context': len_context,

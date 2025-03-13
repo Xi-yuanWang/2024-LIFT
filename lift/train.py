@@ -204,8 +204,8 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
             kvcaches.append((kvcache, kvcache2, len_context))
         torch.cuda.empty_cache()
     import random
-    for _ in tqdm(range(kv_epoches*10)):
-        # random.shuffle(kvcaches)
+    for _ in tqdm(range(kv_epoches)):
+        random.shuffle(kvcaches)
         for kvcache, kvcache2, len_context in kvcaches:
             #kvcache.query_to(model.device)
             #kvcache2.query_to(model.device)
