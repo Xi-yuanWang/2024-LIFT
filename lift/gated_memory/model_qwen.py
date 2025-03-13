@@ -84,7 +84,8 @@ class GMQwen2Attention(Qwen2Attention):
         '''
         self.mem_proj = nn.Sequential(ResSequential([nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False), MyLayerNorm(), nn.SiLU(inplace=True)) for _ in range(7)]), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False))
         '''
-        self.mem_proj = nn.Sequential(MemGLU(3, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False), nn.Linear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
+        glu = MemGLU(3, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
+        self.mem_proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
         
         gatedim = 4 * int(self.head_dim**0.5)
         tmp = GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, gatedim, 1, bias=True)
