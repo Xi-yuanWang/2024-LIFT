@@ -174,7 +174,8 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
         return attn_output
     model.eval()
     torch.cuda.empty_cache()  # Manually release memory
-    optimizer = torch.optim.AdamW([_ for _ in model.parameters() if _.requires_grad], lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 100)
     basemodel = model.model.model
     scaling = basemodel.layers[0].self_attn.scaling
     num_key_value_groups = basemodel.layers[0].self_attn.num_key_value_groups
@@ -242,15 +243,17 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                     #memout = memout.unflatten(1, (8, 5))[:, :, 0]
                     #vattnout = vattnout.unflatten(1, (8, 5))[:, :, 0]
                     
+                    l1loss = (memout - vattnout).abs().mean()
+                    #loss.backward()
                     # print(memout.shape, vattnout.shape)
+                    #with torch.no_grad():
                     tmemloss = 1 - torch.nn.CosineSimilarity(dim=-1)(memout, vattnout).mean()#(memout - vattnout).norm(dim=-1).mean()
-                    tmemloss.backward()
-                    with torch.no_grad():
-                        tmemmagloss = ((memout/(memout.norm(dim=-1, keepdims=True)+1e-3)) * (vattnout.norm(dim=-1, keepdims=True)) - vattnout).norm(dim=-1).mean()
+                    (l1loss + tmemloss).backward()
+                    #with torch.no_grad():
+                    #    tmemmagloss = ((memout/(memout.norm(dim=-1, keepdim=True)+1e-3)) * (vattnout.norm(dim=-1, keepdim=True)) - vattnout).norm(dim=-1).mean()/vattnout.norm(dim=-1).mean()
                     memloss.append(tmemloss.detach())
-                    memmagloss.append(tmemmagloss.detach())
+                    memmagloss.append(l1loss.detach())
                     
-                    # basemodel.layers[layer_idx].self_attn.set_memproj_numgroup()
                     '''
                     gateout = basemodel.layers[layer_idx].self_attn.gate_proj(kvcache2.query_cache[layer_idx].to(model.device))#memouts2[layer_idx]#.squeeze()
                     postattnout = kvcache2.attnout_cache[layer_idx].to(gateout.device).transpose(1, 2)#.squeeze()
@@ -275,6 +278,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 gateloss = 0.0#torch.stack(gateloss).mean()
                 #print(f"mem loss {memloss.item():.3e}, gate loss {gateloss:.3e}", flush=True)
                 optimizer.step()
+                scheduler.step()
                 optimizer.zero_grad()
             kvcache.cpu()
             #kvcache2.cpu()  

@@ -37,8 +37,8 @@ python scripts/test_loogle_lift_distill.py \
     --remove_unused_columns True \
     --report_to none \
     --per_device_train_batch_size 1 \
-    --learning_rate 1e-3 \
-    --weight_decay 1e-5 \
+    --learning_rate 3e-3 \
+    --weight_decay 1e-7 \
     --adam_beta1 0.9 \
     --adam_beta2 0.98 \
     --adam_epsilon 1e-8 \
