@@ -46,6 +46,18 @@ class ResSequential(nn.Module):
             x = x + mod(x)
         return x
 
+class MemGLU(nn.Module):
+    def __init__(self, num_layer: int, *linargs, **linkwargs) -> None:
+        super().__init__()
+        self.num_layer = num_layer
+        self.proj1 = nn.ModuleList([nn.Sequential(GroupedLinear(*linargs, **linkwargs), nn.Identity(), nn.SiLU(inplace=True)) for _ in range(num_layer)])
+        self.proj2 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
+
+    def forward(self, x):
+        for i in range(self.num_layer):
+            x = x + self.proj1[i](x) * self.proj2[i](x)
+        return x
+
 class GMQwen2Attention(Qwen2Attention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
@@ -63,14 +75,17 @@ class GMQwen2Attention(Qwen2Attention):
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=True),
             )
         '''
-        
+        '''
         self.mem_proj = nn.Sequential(
             GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False),
             ResSequential([nn.Sequential(MyLayerNorm(), nn.SiLU(inplace=True), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=False, tailnorm=False)) for _ in range(7)])
             )# MyLayerNorm(), nn.SiLU(inplace=True),
         '''
+        '''
         self.mem_proj = nn.Sequential(ResSequential([nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False), MyLayerNorm(), nn.SiLU(inplace=True)) for _ in range(7)]), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False))
         '''
+        self.mem_proj = nn.Sequential(MemGLU(3, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False), nn.Linear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
+        
         gatedim = 4 * int(self.head_dim**0.5)
         tmp = GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, gatedim, 1, bias=True)
         #with torch.no_grad():
