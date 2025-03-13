@@ -195,7 +195,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 
                 #print(torch.max((sdpa_attention_forward(num_key_value_groups, q, k, v, 0.0, scaling, True).transpose(1, 2) - kvcache.attnout_cache[idx]).abs()))
 
-            input_id2 = input_id[:, len_context:]
+            #input_id2 = input_id[:, len_context:]
             #kvcache2: DistillCache = model.forward(input_ids=input_id2, gate_mask=torch.zeros_like(input_id2), past_key_values=DistillCache(), use_cache=True).past_key_values
             kvcache.cpu()
             #kvcache2.cpu()
@@ -212,6 +212,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 #memouts = model.forward(input_ids=None, gate_mask=None, past_key_values=kvcache, use_cache=True, output_memout=1)
                 #memouts2 = model.forward(input_ids=None, gate_mask=None, past_key_values=kvcache2, use_cache=True, output_memout=-1)
                 memloss = []
+                memmagloss = []
                 gateloss = []
                 for layer_idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
                     # basemodel.layers[layer_idx].self_attn.unset_memproj_numgroup()
@@ -244,7 +245,11 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                     # print(memout.shape, vattnout.shape)
                     tmemloss = 1 - torch.nn.CosineSimilarity(dim=-1)(memout, vattnout).mean()#(memout - vattnout).norm(dim=-1).mean()
                     tmemloss.backward()
+                    with torch.no_grad():
+                        tmemmagloss = ((memout/(memout.norm(dim=-1, keepdims=True)+1e-3)) * (vattnout.norm(dim=-1, keepdims=True)) - vattnout).norm(dim=-1).mean()
                     memloss.append(tmemloss.detach())
+                    memmagloss.append(tmemmagloss.detach())
+                    
                     # basemodel.layers[layer_idx].self_attn.set_memproj_numgroup()
                     '''
                     gateout = basemodel.layers[layer_idx].self_attn.gate_proj(kvcache2.query_cache[layer_idx].to(model.device))#memouts2[layer_idx]#.squeeze()
@@ -264,7 +269,9 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                     gateloss.append(tgateloss.detach())
                     '''
                 memloss = torch.stack(memloss)#.mean()
-                print(memloss.cpu().tolist(), flush=True)
+                memmagloss = torch.stack(memmagloss)
+                print("cos", memloss.cpu().tolist(), flush=True)
+                print("mse", memmagloss.cpu().tolist(), flush=True)
                 gateloss = 0.0#torch.stack(gateloss).mean()
                 #print(f"mem loss {memloss.item():.3e}, gate loss {gateloss:.3e}", flush=True)
                 optimizer.step()
