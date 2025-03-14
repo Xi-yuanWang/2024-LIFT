@@ -75,14 +75,15 @@ class GLUGate(nn.Module):
         k = keys.unflatten(1, (self.num_key_value_heads, 1))
         q = queries.unflatten(1, (self.num_key_value_heads, self.num_key_value_groups))
         attn_weights = ((q @ k.transpose(-1, -2)) * self.scaling).flatten(1, 2)
-        print(k.shape, q.shape)
+        #print(k.shape, q.shape)
         if queries.shape[-2] > 1:
             causal_mask = torch.tril(torch.ones(*attn_weights.shape[-2:], dtype=torch.bool, device=attn_weights.device))[None, None, :, :]
             causal_mask = causal_mask.expand(*attn_weights.shape)
             attn_weights = attn_weights.masked_fill(~causal_mask, -torch.inf)
-        post_sum = torch.logsumexp(attn_weights, dim=-1, keepdim=True).unsqueeze(-1)
+        post_sum = torch.logsumexp(attn_weights, dim=-1, keepdim=True)
         # post_sum = torch.log(torch.sum(torch.exp(attn_weights), dim=-1).unsqueeze(-1))
         memgate = self.proj(queries)
+        #print(memgate.shape, post_sum.shape)
         # print('!' * 10, torch.mean(post_sum), '\n')
         return nn.functional.sigmoid(memgate - post_sum)
 

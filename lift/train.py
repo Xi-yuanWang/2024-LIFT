@@ -211,7 +211,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 for layer_idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
                     q = kvcache.query_cache[layer_idx].to(model.device, non_blocking=True)
                     vattnout = kvcache.virtual_attnout_cache[layer_idx].to(model.device, non_blocking=True)
-                    memout = basemodel.layers[layer_idx].self_attn.mem_proj(q, non_blocking=True)
+                    memout = basemodel.layers[layer_idx].self_attn.mem_proj(q)
                     tmeml1loss = (memout - vattnout).abs().mean()
                     tmemcosloss = 1 - torch.nn.CosineSimilarity(dim=-1)(memout, vattnout).mean()
                     (tmeml1loss + tmemcosloss).backward()
@@ -221,6 +221,8 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
 
                     q = q[:, :, len_context:]
                     k = kvcache.key_cache[layer_idx][:, :, len_context:].to(model.device, non_blocking=True)
+                    #print(q.shape, k.shape, len_context)
+                    #exit()
                     postattnout = kvcache2.attnout_cache[layer_idx].transpose(1, 2).to(model.device, non_blocking=True)
                     attnout = kvcache.attnout_cache[layer_idx][:, len_context:].transpose(1, 2).to(model.device, non_blocking=True)
                     vattnout = vattnout[:, :, len_context:]

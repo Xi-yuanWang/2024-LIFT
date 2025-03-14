@@ -53,15 +53,15 @@ class DistillDataset(Dataset):
         self.model_max_length = model_max_length
         texts = context.replace('\0', ' ')
         len_segment = len_segment * block_size
-        input_ids = self.tokenizer(texts, add_special_tokens=False)['input_ids'][:len_segment]
+        input_ids = self.tokenizer(texts, add_special_tokens=False)['input_ids']#[:len_segment]
 
         prompt = LIFT_ICL_PROMPT.format(title=title)
         prompt = self.tokenizer(prompt, add_special_tokens=False)['input_ids']
 
-        context = torch.tensor(prompt + input_ids, dtype=torch.long)#[:1]
+        context = torch.tensor(prompt + input_ids[:len_segment], dtype=torch.long)#[:1]
         len_context = len(context)
         self.data = []
-        for _ in range(5):
+        for _ in range(3):
             self.data.append({
                 'input_ids': torch.concat((
                     context, 
@@ -70,6 +70,23 @@ class DistillDataset(Dataset):
                     ),
                 'len_context': len_context,
                 })
+        self.data.append({
+            'input_ids': torch.concat((
+                    context,
+                    torch.tensor(self.tokenizer("\n Based on the article \"{title}\", please recite its content<|im_end|>\n<|im_start|>assistant\nSure, the article is \"", add_special_tokens=False)["input_ids"]+input_ids[:6100-len_context], dtype=torch.long)
+                    ), dim=0
+                    ),
+            'len_context': len_context
+        })
+        self.data.append({
+            'input_ids': torch.concat((
+                    context,
+                    torch.tensor(input_ids[len_offset:6144-len_context+len_offset], dtype=torch.long)
+                    ), dim=0
+                    ),
+            'len_context': len_context
+        })
+
 
     def __len__(self):
         return len(self.data)#self.num_segments
@@ -323,13 +340,14 @@ def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_
     for name, param in model.named_parameters():
         if param.requires_grad:
             print(name, param.shape, param.numel())
-    model.save_pretrained(training_args.output_dir, "before_kvmem")
+    model.save_pretrained(training_args.output_dir, "before_distill")
     dataset = DistillDataset(title, context, tokenizer, model_max_length, block_size, len_segment, len_offset)
+    len_context = dataset[0]["len_context"]
     model = distilltrain(model, dataset, tokenizer, training_args, kv_epochs, gather_batches)[0]
-    model.save_pretrained(training_args.output_dir, "after_kvmem")
-    dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
-    model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
-    return model
+    model.save_pretrained(training_args.output_dir, "after_distill")
+    #dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
+    #model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
+    return model, len_context
 
 
 def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Dict, output_file: str, num_resumed: int=0, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_cot: bool=False, use_icl: bool=True):
@@ -351,7 +369,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
         #tmp = deepcopy(qa_pairs[-1])
         #tmp["Q"] = "Who is Xiyuan Wang?"
         #qa_pairs.append(tmp)
-        model = LooGLEtrain(context, title, tokenizer, training_args=training_args, num_syn_qa=num_syn_qa, title_option=title_option, generator_name_or_path=generator_name_or_path, use_cot=use_cot, use_icl=use_icl, **lift_args)
+        model, len_context = LooGLEtrain(context, title, tokenizer, training_args=training_args, num_syn_qa=num_syn_qa, title_option=title_option, generator_name_or_path=generator_name_or_path, use_cot=use_cot, use_icl=use_icl, **lift_args)
         model.eval()
         for qa_pair in tqdm.tqdm(qa_pairs, desc="QA Pair"):
             
@@ -370,6 +388,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             output = model.generate(
                 input_ids=input_ids,
                 gate_mask=gate_mask,
+                position_ids=(torch.arange(input_ids.shape[1])+len_context).unsqueeze(0).to(model.device),
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
                 max_new_tokens=1024,
