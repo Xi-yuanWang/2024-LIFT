@@ -4,16 +4,12 @@ import os
 from openai import OpenAI
 from typing import Dict
 from datetime import datetime
-
-
 def parse_metadata(metadata_kwargs) -> Dict:
     if metadata_kwargs is None:
         return {}
     if len(metadata_kwargs) % 2 == 1:
         raise ValueError("Fail to match metadata_kwargs in pairs.")
     return {key: value for key, value in zip(metadata_kwargs[::2], metadata_kwargs[1::2])}
-
-
 def create_batch_file(client: OpenAI, input_path: str, metadata: Dict):
     temp_file = '_temp_' + datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + '.jsonl'
     if os.path.exists(temp_file):
@@ -82,19 +78,27 @@ def retrieve_batch(client: OpenAI, batch_id, file_id, loogle_file, result_file):
             with open(loogle_file, 'r') as f:
                 raw_data = [json.loads(l) for l in f]
             for i, d in enumerate(raw_data):
-                #print(d)
                 if 'sample' in d:
                     for j, q in enumerate(d['sample']['qa_pairs']):
-                        response = data[f'LooGLE-{i}-{j}']['response']['body']['choices'][0]['message']['content']
+                        if f'LooGLE-{i}-{j}' in data:
+                            response = data[f'LooGLE-{i}-{j}']['response']['body']['choices'][0]['message']['content']
+                        else:
+                            print(f"Fail to retrieve LooGLE-{i}-{j}!\nQ: {q['Q']}\nA: {q['A']}\nP: {q['pred']}")
+                            response = ""
                         q['score'] = 'true' in response.lower()
                     d['meta_data']['score'] = sum([q['score'] for q in d['sample']['qa_pairs']]) / len(d['sample']['qa_pairs'])
                 else:
                     for j, q in enumerate(d['qa_pairs']):
-                        response = data[f'LooGLE-{i}-{j}']['response']['body']['choices'][0]['message']['content']
+                        if f'LooGLE-{i}-{j}' in data:
+                            response = data[f'LooGLE-{i}-{j}']['response']['body']['choices'][0]['message']['content']
+                        else:
+                            print(f"Fail to retrieve LooGLE-{i}-{j}!\nQ: {q['Q']}\nA: {q['A']}\nP: {q['pred']}")
+                            response = ""
                         q['score'] = 'true' in response.lower()
             with open(result_file, 'w') as f:
                 for d in raw_data:
-                    f.write(json.dumps(d, indent=2) + '\n')
+                    f.write(json.dumps(d) + '\n')
+
             print(f"Write to {result_file}. Deleting OpenAI input and output files...")
             client.files.delete(info.input_file_id)
             client.files.delete(info.output_file_id)
@@ -115,21 +119,16 @@ def retrieve_batch(client: OpenAI, batch_id, file_id, loogle_file, result_file):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--action', required=True, choices=['submit', 'list', 'retrieve'])
-    parser.add_argument('--file', help="LooGLE output file.")
+    parser.add_argument('--api_key', default=os.environ["GPT4_API_KEY"], help="GPT4 API KEY. Defaults to the envar `GPT4_API_KEY`.")
+    parser.add_argument('--loogle_file', help="LooGLE output file.")
     parser.add_argument('--batch_id', help="The batch ID of a previous request.")
     parser.add_argument('--file_id', help="The output file ID.")
+    parser.add_argument('--result_file', help="The result GPT_SCORE file.")
     parser.add_argument('--metadata_kwargs', nargs='*', help="The following are metadata kwargs.")
     args = parser.parse_args()
-    
-    args.loogle_file = args.file
-    args.result_file = args.loogle_file.replace("outputs", "parsed")
-
     metadata = parse_metadata(args.metadata_kwargs)
 
-    with open("api_key.txt", "r") as f:
-        api_key = f.readline().strip()
-
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=args.api_key)
 
     if args.action == 'submit':
         if args.loogle_file is None:
@@ -155,4 +154,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

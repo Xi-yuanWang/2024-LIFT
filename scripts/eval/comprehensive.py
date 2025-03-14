@@ -139,7 +139,7 @@ for sample, sample_gpt4score, sample_memgate in tqdm.tqdm(zip(data, data_gpt4sco
     if sample_gpt4score is None:
         sample_gpt4score = [None] * len(sample['qa_pairs'])
     else:
-        sample_gpt4score = [q['scores']['gpt4_score'] for q in sample_gpt4score['qa_pairs']]
+        sample_gpt4score = [q['score'] for q in sample_gpt4score['qa_pairs']]
     if sample_memgate is None:
         sample_memgate = [None] * len(sample['qa_pairs'])
     for qa_pair, gpt4score, memgate in zip(sample['qa_pairs'], sample_gpt4score, sample_memgate):

@@ -1,13 +1,21 @@
 from dataclasses import dataclass, field
-from typing import Optional, Any, List
+from typing import Optional, Any, List, Union, Literal
 from transformers import HfArgumentParser
 
 
 @dataclass
 class ModelArguments:
-    model_name_or_path: str
-    tokenizer_name_or_path: Optional[str] = field(default=None)
-    model_max_length: Optional[int] = field(default=None)
+    model_name_or_path: str = field(
+        metadata={'help': "The model to train."}
+    )
+    tokenizer_name_or_path: Optional[str] = field(
+        default=None,
+        metadata={'help': "The tokenizer. Defaults to model_name_or_path."}
+    )
+    model_max_length: Optional[int] = field(
+        default=7800,
+        metadata={'help': "The context window."}
+    )
     
     def __post_init__(self):
         if self.tokenizer_name_or_path is None:
@@ -16,53 +24,80 @@ class ModelArguments:
 
 @dataclass
 class DataTrainingArguments:
-    """
-    Arguments pertaining to what data we are going to input our model for training and eval.
-    """
     block_size: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": (
-                "Optional input sequence length after tokenization. "
-                "The training dataset will be truncated in block of this size for training. "
-                "Default to the model max input length for single sentence inputs (take into account special tokens)."
-            )
-        },
+        default=256,
+        metadata={'help': "The number of tokens in a block (a block is the unit of segments and offsets)."},
     )
     len_segment: int = field(
-        default=2,
-        metadata={
-            "help": (
-                "The number of blocks in a segment."
-            )
-        }
+        default=8,
+        metadata={'help': "The number of blocks in a segment."}
     )
     len_offset: int = field(
-        default=1,
-        metadata={
-            "help": (
-                "The offset from one segment to the next segment."
-            )
-        }
+        default=3,
+        metadata={'help': "The number of blocks in an offset from one segment to the next one."}
+    )
+    use_random_segment: bool = field(
+        default=False,
+        metadata={'help': "Randomly sample batches of segments during LIFT."}
     )
 
 
 @dataclass
 class CustomTrainingArguments:
-    use_lora: bool = field(default=False)
-    lora_rank: int = field(default=8)
-    use_pissa: bool = field(default=False)
-    use_gated_memory: bool = field(default=False, metadata={'help': "Use the gated-memory technique."})
-    load_in_4bit: bool = field(default=False)
-    load_in_8bit: bool = field(default=False)
-    gather_batches: bool = field(default=False)
-    involve_qa_epochs: int = field(default=0)
+    use_lora: bool = field(
+        default=False,
+        metadata={'help': "Use LoRA."}
+    )
+    lora_rank: int = field(
+        default=128,
+        metadata={'help': "The rank of LoRA adapters."}
+    )
+    lora_target_modules: List[str] = field(
+        default_factory=lambda: ['q_proj', 'k_proj', 'v_proj', 'o_proj'],
+        metadata={'help': "The target modules of LoRA adapters."}
+    )
+    use_pissa: bool = field(
+        default=False,
+        metadata={'help': "Use PiSSA intialization for LoRA. Require model_name_or_path to be a PiSSA checkpoint."}
+    )
+    use_gated_memory: bool = field(
+        default=False,
+        metadata={'help': "Use Gated Memory."}
+    )
+    use_prefix_tuning: bool = field(
+        default=False,
+        metadata={'help': "Use prefix-tuning."}
+    )
+    num_virtual_tokens: Optional[int] = field(
+        default=None,
+        metadata={'help': "The number of learnable tokens in prefix-tuning."}
+    )
+    load_in_4bit: bool = field(
+        default=False,
+        metadata={'help': "Load in 4bit."}
+    )
+    load_in_8bit: bool = field(
+        default=False,
+        metadata={'help': "Load in 8bit."}
+    )
+    gather_batches: bool = field(
+        default=True,
+        metadata={'help': "Update only once per epoch. Implemented with gradient accumulate."}
+    )
+    involve_qa_epochs: int = field(
+        default=0,
+        metadata={'help': "The number of epochs of the second LIFT stage (incorporate auxiliary tasks)."}
+    )
     
     def __post_init__(self):
+        if len(self.lora_target_modules) == 1 and self.lora_target_modules[0] == 'all-linear':
+            self.lora_target_modules = 'all-linear'
         assert not self.load_in_8bit, "8-bit loading is not supported yet."
         if self.use_pissa:
             assert self.use_lora, "LoRA must be enabled when using PiSSA."
         assert int(self.use_gated_memory) + int(self.use_lora) <= 1, "LoRA and the gated-memory technique cannot be used simultaneously."
+        if self.use_prefix_tuning and self.num_virtual_tokens is None:
+            raise ValueError("Use prefix-tuning but '--num_virtual_tokens' is not provided.")
 
 
 def parse_args(class_clusters: tuple[Any|tuple[Any]], no_dict: tuple[Any], return_config: bool=False):

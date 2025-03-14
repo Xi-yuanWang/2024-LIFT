@@ -7,22 +7,22 @@ from transformers import (
 )
 from typing import List, Tuple, Optional
 from copy import deepcopy
+from random import randint
 
 
 class ContextDataset(Dataset):
     """Given a piece of context, `ContextDataset` creates a torch-Dataset, using the truncation strategy described in our paper.
     """
-    def __init__(self, context: str, tokenizer: PreTrainedTokenizer, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3):
-        """
-        Args:
-            context (str): the context to train on.
-            tokenizer (PreTrainedTokenizer): the AutoTokenizer.
-            model_max_length (int): OPTIONAL, default to `4096`; the texts will be clipped at the `model_max_length`-th token.
-            block_size (int): OPTIONAL, default to `256`; the number of tokens in a block; a block is the unit of segments and offsets.
-            len_segment (int): OPTIONAL, default to `8`; the number of units in a segment; the article is divided into segments.
-            len_offset (int): OPTIONAL, default to `3`; the number of units per offset; it determines the offset from one segment to the next one.
-        """
-        self.ignore_index = -100  # The default value for ignored labels in torch
+    def __init__(
+        self,
+        context: str,
+        tokenizer: PreTrainedTokenizer,
+        model_max_length: int = 7800,
+        block_size: int = 256,
+        len_segment: int = 8,
+        len_offset: int = 3,
+        **kwargs,
+    ):
         self.tokenizer = tokenizer
         self.model_max_length = model_max_length
         texts = context.replace('\0', ' ')
@@ -45,7 +45,7 @@ class ContextDataset(Dataset):
         # Transfer to Tensor
         input_ids = torch.tensor(input_ids, dtype=torch.long)
         labels = torch.tensor(labels, dtype=torch.long)
-        labels[:len_input] = self.ignore_index  # mask the unsupervised part
+        labels[:len_input] = -100  # mask the unsupervised part
         attention_mask = torch.ones_like(input_ids)
         return {
             'input_ids': input_ids,
@@ -64,3 +64,32 @@ class ContextDataset(Dataset):
     
     def generate_task(self):
         raise NotImplementedError
+
+
+class RandomContextDataset(ContextDataset):
+    def __init__(
+        self,
+        context: str,
+        tokenizer: PreTrainedTokenizer,
+        model_max_length: int = 7800,
+        block_size: int = 256,
+        len_segment: int = 8,
+        **kwargs,
+    ):
+        self.tokenizer = tokenizer
+        if len_segment <= 1:
+            raise ValueError(r"Require len_segment >= 2, since segment lengths are sampled from [2 * block_size, len_segment * block_size].")
+        self.min_segment = len_segment * 2
+        self.max_segment = len_segment * block_size
+        self.model_max_length = model_max_length
+        context = context.replace('\0', ' ')
+        self.input_ids = [self.tokenizer.bos_token_id] + self.tokenizer(context, add_special_tokens=False)['input_ids'] + [self.tokenizer.eos_token_id]
+        self.num_segments = (len(self.input_ids) // self.max_segment + 1) * 3  # num_segments determines the batch size
+    
+    def __getitem__(self, index):
+        seg_len = randint(self.min_segment, self.max_segment)
+        if index == 0:
+            return self.preprocessing((self.input_ids[:seg_len], 0))
+        else:
+            st = randint(0, len(self.input_ids) - seg_len + 1)
+            return self.preprocessing((self.input_ids[st:st+seg_len], seg_len // 2))

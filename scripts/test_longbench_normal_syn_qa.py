@@ -268,7 +268,7 @@ class LongBenchDataset(ICLContextDataset):
         return len(self.data) if self.enable_qa_tag else self.num_segments
     
 
-def LongBenchtrain(context: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, use_gated_memory: bool=False, generator_name_or_path: Optional[str]=None, use_icl: bool=True, **kwargs):
+def LongBenchtrain(context: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, use_gated_memory: bool=False, generator_name_or_path: Optional[str]=None, use_icl: bool=True, use_prefix_tuning: bool=False, num_virtual_tokens: Optional[int]=None, **kwargs):
     model = load_model(
         model_name_or_path=model_name_or_path,
         use_lora=use_lora,
@@ -276,10 +276,12 @@ def LongBenchtrain(context: str, tokenizer: PreTrainedTokenizer, model_name_or_p
         use_pissa=use_pissa,
         load_in_4bit=load_in_4bit,
         vocab_size=len(tokenizer),
-        use_gated_memory=use_gated_memory
+        use_gated_memory=use_gated_memory,
+        use_prefix_tuning=use_prefix_tuning,
+        num_virtual_tokens=num_virtual_tokens
     )
-    if use_lora or use_gated_memory:
-        dataset = LongBenchDataset(context, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, generator_name_or_path, use_icl)
+    dataset = LongBenchDataset(context, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, generator_name_or_path, use_icl)
+    if use_lora or use_gated_memory or use_prefix_tuning:
         model = train(
             model=model,
             dataset=dataset,
@@ -288,7 +290,15 @@ def LongBenchtrain(context: str, tokenizer: PreTrainedTokenizer, model_name_or_p
             involve_qa_epochs=involve_qa_epochs,
             gather_batches=gather_batches,
         )[0]
-    return model
+    losses = []
+    with torch.no_grad():
+        for sample in dataset:
+            input_ids = sample['input_ids'].cuda().unsqueeze(0)
+            attention_mask = sample['attention_mask'].cuda().unsqueeze(0)
+            labels = sample['labels'].cuda().unsqueeze(0)
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+            losses.append(outputs['loss'].cpu().item())
+    return model, sum(losses) / len(losses)
 
 
 def prediction(data: List[Dict]=[], output_path: str="", num_syn_qa: int=0, training_args: TrainingArguments=None, lift_args: Dict=None, subtask_name: str=None, generator_name_or_path: Optional[str]=None, use_icl: bool=True):
@@ -303,7 +313,7 @@ def prediction(data: List[Dict]=[], output_path: str="", num_syn_qa: int=0, trai
             {'role': 'system', 'content': "You are a helpful assistant."},
             {'role': 'user', 'content': prompt_template.format(context=context, input=question)}
         ]
-        model = LongBenchtrain(
+        model, loss = LongBenchtrain(
             **lift_args,
             context=context,
             tokenizer=tokenizer,
@@ -329,6 +339,7 @@ def prediction(data: List[Dict]=[], output_path: str="", num_syn_qa: int=0, trai
         output_ids = output_ids[:, input_ids.shape[-1]:]
         pred = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         sample['pred'] = pred
+        sample['loss'] = loss
         with open(output_path, 'a') as f:
             f.write(json.dumps(sample) + '\n')
     return data
