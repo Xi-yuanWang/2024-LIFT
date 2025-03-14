@@ -32,7 +32,7 @@ from copy import deepcopy
 
 LIFT_ICL_PROMPT = "<|im_start|>user\n Given the article \"{title}\": "
 LOOGLEFORMAT_NON_ICL = "\n Based on the article \"{title}\", please answer the following question concisely and accurately: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
-LOOGLEFORMAT_COT = " Based on the article \"{title}\" and the following question, please first recall four original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nEvidence: "        
+LOOGLEFORMAT_COT = "\n Based on the article \"{title}\" and the following question, please first recall four original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nEvidence: "        
 
 
 class DistillDataset(Dataset):
@@ -61,7 +61,7 @@ class DistillDataset(Dataset):
         context = torch.tensor(prompt + input_ids[:len_segment], dtype=torch.long)#[:1]
         len_context = len(context)
         self.data = []
-        for _ in range(3):
+        for _ in range(6):
             self.data.append({
                 'input_ids': torch.concat((
                     context, 
@@ -73,7 +73,15 @@ class DistillDataset(Dataset):
         self.data.append({
             'input_ids': torch.concat((
                     context,
-                    torch.tensor(self.tokenizer("\n Based on the article \"{title}\", please recite its content<|im_end|>\n<|im_start|>assistant\nSure, the article is \"", add_special_tokens=False)["input_ids"]+input_ids[:6100-len_context], dtype=torch.long)
+                    torch.tensor(self.tokenizer(f"\n Based on the article \"{title}\", please recite its content<|im_end|>\n<|im_start|>assistant\nSure, the article is \"", add_special_tokens=False)["input_ids"]+input_ids[:6100-len_context], dtype=torch.long)
+                    ), dim=0
+                    ),
+            'len_context': len_context
+        })
+        self.data.append({
+            'input_ids': torch.concat((
+                    context,
+                    torch.tensor(self.tokenizer(f"\n Based on the article \"{title}\" and the following question, please first recall four original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: Who is Picardo? What is the title of this work? Where Picardo is born? Who is his father? <|im_end|>\n<|im_start|>assistant\nEvidence: ", add_special_tokens=False)["input_ids"]+input_ids[max(len_context-1024, 0):len_context] + self.tokenizer(f"\n Answer: ", add_special_tokens=False)["input_ids"]+input_ids[max(len_context-2048, 0):max(len_context-1024, 0)]+self.tokenizer(f".<|im_end|>", add_special_tokens=False)["input_ids"], dtype=torch.long)
                     ), dim=0
                     ),
             'len_context': len_context
@@ -397,6 +405,18 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             )
             response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=True)
             qa_pair['pred'] = response
+
+            output2 = model.generate(
+                input_ids=input_ids,
+                gate_mask=gate_mask,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+                max_new_tokens=1024,
+                use_cache=True,
+                do_sample=False,
+            )
+            response = tokenizer.decode(output2[0][input_ids.shape[-1]:], skip_special_tokens=True)
+            qa_pair['pred2'] = response
         output_case = {
             'title': title,
             'input': context,

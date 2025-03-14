@@ -33,12 +33,12 @@ python scripts/test_loogle_lift_distill.py \
     --gather_batches False \
     --involve_qa_epochs 0 \
     --num_train_epochs 10 \
-    --kv_epochs 100 \
+    --kv_epochs 20 \
     --remove_unused_columns True \
     --report_to none \
     --per_device_train_batch_size 1 \
     --learning_rate 3e-3 \
-    --weight_decay 1e-7 \
+    --weight_decay 1e-1 \
     --adam_beta1 0.9 \
     --adam_beta2 0.98 \
     --adam_epsilon 1e-8 \

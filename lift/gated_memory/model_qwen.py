@@ -68,7 +68,7 @@ class GLUGate(nn.Module):
         self.scaling = scaling
         self.head_dim = linargs[0]
         glu = MemGLU(num_layer, num_key_value_groups, num_key_value_heads, *linargs, **linkwargs)
-        self.proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 1, bias=True))
+        self.proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 1, bias=False))
         
     
     def forward(self, queries: torch.Tensor, keys: torch.Tensor):
@@ -85,7 +85,7 @@ class GLUGate(nn.Module):
         memgate = self.proj(queries)
         #print(memgate.shape, post_sum.shape)
         # print('!' * 10, torch.mean(post_sum), '\n')
-        return nn.functional.sigmoid(memgate - post_sum)
+        return nn.functional.sigmoid(memgate - post_sum -3)
 
 class GMQwen2Attention(Qwen2Attention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""

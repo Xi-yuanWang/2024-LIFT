@@ -172,6 +172,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
         )
         attn_output = attn_output.contiguous()
         return attn_output
+    
     model.eval()
     torch.cuda.empty_cache()  # Manually release memory
     optimizer = torch.optim.AdamW(model.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
@@ -221,8 +222,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
 
                     q = q[:, :, len_context:]
                     k = kvcache.key_cache[layer_idx][:, :, len_context:].to(model.device, non_blocking=True)
-                    #print(q.shape, k.shape, len_context)
-                    #exit()
+
                     postattnout = kvcache2.attnout_cache[layer_idx].transpose(1, 2).to(model.device, non_blocking=True)
                     attnout = kvcache.attnout_cache[layer_idx][:, len_context:].transpose(1, 2).to(model.device, non_blocking=True)
                     vattnout = vattnout[:, :, len_context:]
