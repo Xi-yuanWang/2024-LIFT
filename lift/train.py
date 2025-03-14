@@ -66,6 +66,7 @@ def train(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrained
     )
     if training_args.num_train_epochs > 0:
         trainer.train()
+        trainer.save_model(trainer.args.output_dir)
     # Load the dataset with QA pairs and continue-finetune the model
     if involve_qa_epochs > 0:
         dataset.enable_qa()
@@ -85,6 +86,7 @@ def train(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrained
             optimizer=trainer.optimizer,
         )
         trainer_syn.train()
+        trainer_syn.save_model(trainer_syn.args.output_dir)
     # Clear cache
     for param in model.parameters():
         if param.requires_grad:

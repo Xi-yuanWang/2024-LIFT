@@ -111,10 +111,13 @@ class ICLContextDataset(Dataset):
         labels = torch.tensor(labels, dtype=torch.long)
         labels[:len_input] = self.ignore_index  # mask the unsupervised part
         attention_mask = torch.ones_like(input_ids)
+        
+        dp_mask = torch.rand(input_ids.shape) > 0.05
+
         return {
-            'input_ids': input_ids,
-            'labels': labels,
-            'attention_mask': attention_mask,
+            'input_ids': input_ids[dp_mask],
+            'labels': labels[dp_mask],
+            'attention_mask': attention_mask[dp_mask],
         }
     
     def __getitem__(self, index):
@@ -143,7 +146,7 @@ class ICLContextDataset(Dataset):
 
 
 LOOGLEFORMAT_NON_ICL = "<|im_start|>user\nBased on the article <<{title}>>, please answer the following question concisely and accurately: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
-LOOGLEFORMAT_COT = "<|im_start|>user\nBased on the article <<{title}>> and the following question, please first recall original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nEvidence: "
+LOOGLEFORMAT_COT = "<|im_start|>user\nBased on the article <<{title}>> and the following question, please first recall four original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nEvidence: "
 
 
 @dataclass
@@ -292,7 +295,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
         title = sample['title']
         # qa_pairs = sample['test_qa_pairs']
         qa_pairs = eval(sample['qa_pairs'])
-        #from copy import deepcopy
+        from copy import deepcopy
         #tmp = deepcopy(qa_pairs[-1])
         #tmp["Q"] = "Where is the capital of China?"
         #qa_pairs.append(tmp) 
@@ -303,7 +306,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
         model.eval()
         for qa_pair in tqdm.tqdm(qa_pairs, desc="QA Pair"):
             
-            if not use_cot:
+            if True:#not use_cot:
                 input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=qa_pair['Q'])
             else:
                 input_text = LOOGLEFORMAT_COT.format(title=title, question=qa_pair['Q'])
@@ -327,10 +330,39 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             )
             response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=True)
             qa_pair['pred'] = response
+        qa_pairs2 = deepcopy(qa_pairs)        
+        for qa_pair in tqdm.tqdm(qa_pairs2, desc="QA Pair"):
+
+            if False:#not use_cot:
+                input_text = LOOGLEFORMAT_NON_ICL.format(title=title, question=qa_pair['Q'])
+            else:
+                input_text = LOOGLEFORMAT_COT.format(title=title, question=qa_pair['Q'])
+            print(f'input_text: {input_text}')
+            input_ids = tokenizer(input_text, add_special_tokens=False)['input_ids']#[:-1]
+            print(tokenizer.decode(input_ids, skip_special_tokens=False))
+            if len(input_ids) > model_max_length:
+                raise NotImplementedError
+                input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
+            input_ids = torch.tensor(input_ids, dtype=torch.long, device=model.device).unsqueeze(0)
+            attention_mask = torch.ones_like(input_ids)
+            #terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
+            output = model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+                max_new_tokens=1024,
+                use_cache=True,
+                do_sample=False,
+            )
+            response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=True)
+            qa_pair['pred'] = response
+    
+    
         output_case = {
             'title': title,
             'input': context,
-            'qa_pairs': qa_pairs
+            'qa_pairs': qa_pairs + qa_pairs2
         }
         #print(output_case, flush=True)
         with open(output_file, 'a') as f:
