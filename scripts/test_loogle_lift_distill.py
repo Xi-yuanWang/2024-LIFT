@@ -59,9 +59,11 @@ class DistillDataset(Dataset):
         prompt = self.tokenizer(prompt, add_special_tokens=False)['input_ids']
 
         context = torch.tensor(prompt + input_ids[:len_segment], dtype=torch.long)#[:1]
+        print(self.tokenizer.decode(context))
+        
         len_context = len(context)
         self.data = []
-        for _ in range(6):
+        for _ in range(5):
             self.data.append({
                 'input_ids': torch.concat((
                     context, 
@@ -74,6 +76,14 @@ class DistillDataset(Dataset):
             'input_ids': torch.concat((
                     context,
                     torch.tensor(self.tokenizer(f"\n Based on the article \"{title}\", please recite its content<|im_end|>\n<|im_start|>assistant\nSure, the article is \"", add_special_tokens=False)["input_ids"]+input_ids[:6100-len_context], dtype=torch.long)
+                    ), dim=0
+                    ),
+            'len_context': len_context
+        })
+        self.data.append({
+            'input_ids': torch.concat((
+                    context,
+                    torch.tensor(self.tokenizer(f"\n Based on the article \"{title}\", please recite its content<|im_end|>\n<|im_start|>assistant\nSure, the article is \"", add_special_tokens=False)["input_ids"]+input_ids[6000-len_context:4096], dtype=torch.long)
                     ), dim=0
                     ),
             'len_context': len_context
