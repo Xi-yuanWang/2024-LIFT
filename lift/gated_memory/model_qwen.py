@@ -19,6 +19,7 @@ class DistillCache(DynamicCache):
         self.query_cache = {}
         self.attnout_cache = {}
         self.virtual_attnout_cache = {}
+        self.post_attnout_cache = {}
 
     def cpu(self):
         for i in range(len(self.key_cache)):
@@ -31,6 +32,8 @@ class DistillCache(DynamicCache):
             self.attnout_cache[key] = self.attnout_cache[key].cpu()
         for key in self.virtual_attnout_cache:
             self.virtual_attnout_cache[key] = self.virtual_attnout_cache[key].cpu()
+        for key in self.post_attnout_cache:
+            self.post_attnout_cache[key] = self.post_attnout_cache[key].cpu()
     
     def query_to(self, dev):
         for key in self.query_cache:

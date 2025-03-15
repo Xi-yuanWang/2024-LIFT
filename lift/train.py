@@ -193,17 +193,17 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 k_lower = k[:, :, :len_context]#k[:, :, :len_context]
                 v_lower = v[:, :, :len_context]
                 kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q, k_lower, v_lower, 0.0, scaling, False)
-            
-            input_id2 = input_id[:, len_context:]
-            kvcache2: DistillCache = model.forward(input_ids=input_id2, gate_mask=torch.zeros_like(input_id2), past_key_values=DistillCache(), position_ids=len_context + torch.arange(input_id2.shape[-1], device=model.device).unsqueeze(0), use_cache=True).past_key_values
+                q_upper = q[:, :, len_context:]
+                k_upper = k[:, :, len_context:]
+                v_upper = v[:, :, len_context:]
+                kvcache.post_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q_upper, k_upper, v_upper, 0.0, scaling, True)
             kvcache.cpu()
-            kvcache2.cpu()
-            kvcaches.append((kvcache, kvcache2, len_context))
+            data.append((kvcache, len_context))
         torch.cuda.empty_cache()
     import random
-    for _ in tqdm(range(kv_epoches)):
+    for _ in tqdm(range()):
         random.shuffle(kvcaches)
-        for kvcache, kvcache2, len_context in kvcaches:
+        for kvcache, len_context in kvcaches:
             if True:
                 meml1loss = []
                 memcosloss = []
@@ -223,7 +223,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                     q = q[:, :, len_context:]
                     k = kvcache.key_cache[layer_idx][:, :, len_context:].to(model.device, non_blocking=True)
 
-                    postattnout = kvcache2.attnout_cache[layer_idx].transpose(1, 2).to(model.device, non_blocking=True)
+                    postattnout = kvcache.post_attnout_cache[layer_idx].to(model.device, non_blocking=True)
                     attnout = kvcache.attnout_cache[layer_idx][:, len_context:].transpose(1, 2).to(model.device, non_blocking=True)
                     vattnout = vattnout[:, :, len_context:]
                     
@@ -248,7 +248,6 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 scheduler.step()
                 optimizer.zero_grad()
             kvcache.cpu()
-            kvcache2.cpu()  
             torch.cuda.empty_cache()
     return model, optimizer
 
