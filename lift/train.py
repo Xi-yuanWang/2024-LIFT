@@ -185,18 +185,19 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
         with torch.no_grad():
             input_id = data["input_ids"].unsqueeze(0).to(model.device)
             len_context = data["len_context"]
-            outputs = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=DistillCache(), use_cache=True)
-            kvcache: DistillCache = outputs.past_key_values
+            kvcache: DistillCache = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=DistillCache(), use_cache=True).past_key_values
+            torch.cuda.empty_cache()
             for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):#kvcache.query_cache:
-                q, k, v = kvcache.query_cache[idx], kvcache.key_cache[idx], kvcache.value_cache[idx]
+                q, k, v = kvcache.query_cache[idx].to(model.device), kvcache.key_cache[idx].to(model.device), kvcache.value_cache[idx].to(model.device)
                 k_lower = k[:, :, :len_context]#k[:, :, :len_context]
                 v_lower = v[:, :, :len_context]
-                kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q, k_lower, v_lower, 0.0, scaling, False)
+                kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q, k_lower, v_lower, 0.0, scaling, False).cpu()
                 q_upper = q[:, :, len_context:]
                 k_upper = k[:, :, len_context:]
                 v_upper = v[:, :, len_context:]
                 kvcache.post_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q_upper, k_upper, v_upper, 0.0, scaling, True)
-            kvcache.cpu()
+                kvcache.cpu()
+                torch.cuda.empty_cache()
             kvcaches.append((kvcache, len_context))
         torch.cuda.empty_cache()
     import random
@@ -220,7 +221,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                     memcosloss.append(tmemcosloss.detach())
 
                     q = q[:, :, len_context:]
-                    k = kvcache.key_cache[layer_idx][:, :, len_context:].to(model.device, non_blocking=True)
+                    k = None#kvcache.key_cache[layer_idx][:, :, len_context:].to(model.device, non_blocking=True)
 
                     postattnout = kvcache.post_attnout_cache[layer_idx].to(model.device, non_blocking=True)
                     attnout = kvcache.attnout_cache[layer_idx][:, len_context:].transpose(1, 2).to(model.device, non_blocking=True)

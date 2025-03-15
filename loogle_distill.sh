@@ -23,7 +23,7 @@ python scripts/test_loogle_lift_distill.py \
     --model_max_length 32000 \
     --block_size 256 \
     --len_segment 16 \
-    --len_offset 4 \
+    --len_offset 16 \
     --use_gated_memory True \
     --load_in_4bit True \
     --use_icl False \

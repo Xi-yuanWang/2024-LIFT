@@ -33,7 +33,21 @@ from copy import deepcopy
 LIFT_ICL_PROMPT = "<|im_start|>user\n Given the article \"{title}\": "
 LOOGLEFORMAT_NON_ICL = "\n Based on the article \"{title}\", please answer the following question concisely and accurately: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
 LOOGLEFORMAT_COT = "\n Based on the article \"{title}\" and the following question, please first recall four original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nEvidence: "        
+def removeendtoken(intensor, tokenizer:PreTrainedTokenizer):
+    intensor = intensor[intensor!=tokenizer.eos_token_id]
+    intensor = intensor[intensor!=tokenizer.pad_token_id]
+    return intensor
 
+
+def randomdropout(intensor, dp:float=0.05):
+    mask = torch.rand_like(intensor, dtype=torch.float) > dp
+    intensor = intensor[mask]
+    return intensor
+
+def randomreplace(intensor, tokenizer: PreTrainedTokenizer, dp: float=0.05):
+    mask = torch.rand_like(intensor, dtype=torch.float) < dp
+    intensor[mask] = torch.randint_like(intensor[mask], 0, tokenizer.vocab_size - 1)
+    return intensor
 
 class DistillDataset(Dataset):
     """Given a piece of context, `ContextDataset` creates a torch-Dataset, using the truncation strategy described in our paper.
@@ -53,57 +67,42 @@ class DistillDataset(Dataset):
         self.model_max_length = model_max_length
         texts = context.replace('\0', ' ')
         len_segment = len_segment * block_size
+        len_offset = len_offset * block_size
         input_ids = self.tokenizer(texts, add_special_tokens=False)['input_ids']#[:len_segment]
 
         prompt = LIFT_ICL_PROMPT.format(title=title)
         prompt = self.tokenizer(prompt, add_special_tokens=False)['input_ids']
 
-        context = torch.tensor(prompt + input_ids[:len_segment], dtype=torch.long)#[:1]
-        print(self.tokenizer.decode(context))
+        context = torch.tensor(prompt + input_ids, dtype=torch.long)#[:1]
         
         len_context = len(context)
+        assert len_context < 110 * 1000, "max rope is 128k"
         self.data = []
-        for _ in range(5):
+        for _ in range(1):
             self.data.append({
-                'input_ids': torch.concat((
-                    context, 
-                    torch.randint(0, tokenizer.vocab_size + 1, (6144-len_context,))
-                    ), dim=0
-                    ),
+                "basetext": context,
+                'input_ids': removeendtoken(torch.randint(0, tokenizer.vocab_size - 1, (len_offset,))),
                 'len_context': len_context,
                 })
-        self.data.append({
-            'input_ids': torch.concat((
-                    context,
-                    torch.tensor(self.tokenizer(f"\n Based on the article \"{title}\", please recite its content<|im_end|>\n<|im_start|>assistant\nSure, the article is \"", add_special_tokens=False)["input_ids"]+input_ids[:6100-len_context], dtype=torch.long)
-                    ), dim=0
-                    ),
-            'len_context': len_context
-        })
-        self.data.append({
-            'input_ids': torch.concat((
-                    context,
-                    torch.tensor(self.tokenizer(f"\n Based on the article \"{title}\", please recite its content<|im_end|>\n<|im_start|>assistant\nSure, the article is \"", add_special_tokens=False)["input_ids"]+input_ids[6000-len_context:4096], dtype=torch.long)
-                    ), dim=0
-                    ),
-            'len_context': len_context
-        })
-        self.data.append({
-            'input_ids': torch.concat((
-                    context,
-                    torch.tensor(self.tokenizer(f"\n Based on the article \"{title}\" and the following question, please first recall four original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: Who is Picardo? What is the title of this work? Where Picardo is born? Who is his father? <|im_end|>\n<|im_start|>assistant\nEvidence: ", add_special_tokens=False)["input_ids"]+input_ids[max(len_context-1024, 0):len_context] + self.tokenizer(f"\n Answer: ", add_special_tokens=False)["input_ids"]+input_ids[max(len_context-2048, 0):max(len_context-1024, 0)]+self.tokenizer(f".<|im_end|>", add_special_tokens=False)["input_ids"], dtype=torch.long)
-                    ), dim=0
-                    ),
-            'len_context': len_context
-        })
-        self.data.append({
-            'input_ids': torch.concat((
-                    context,
-                    torch.tensor(input_ids[len_offset:6144-len_context+len_offset], dtype=torch.long)
-                    ), dim=0
-                    ),
-            'len_context': len_context
-        })
+        for i in range(0, len_context, len_offset):
+            self.data.append({
+                "basetext": context,
+                'input_ids': removeendtoken(randomreplace(randomdropout(torch.tensor(
+                            self.tokenizer(f"\n Based on the article \"{title}\", please recite its content<|im_end|>\n<|im_start|>assistant\nSure, the article is \"", add_special_tokens=False)["input_ids"]
+                            +input_ids[i:min(i+len_offset, len_context)], dtype=torch.long)), tokenizer)),
+                'len_context': len_context
+            })
+        for i in range(0, len_context-200, len_offset):
+            self.data.append({
+                'basetext': context,
+                'input_ids': randomreplace(randomdropout(torch.tensor(
+                            self.tokenizer(f"\n Based on the article \"{title}\" and the following question, please first recall four original sentences related to the question as evidence, and then answer the question solely based on this evidence: \nQuestion: What is the content before the following paragraph?", add_special_tokens=False)["input_ids"]
+                            + input_ids[i+len_offset-100:i+len_offset] 
+                            + self.tokenizer(f"<|im_end|>\n<|im_start|>assistant\nAnswer: ", add_special_tokens=False)["input_ids"]
+                            + input_ids[i:i+len_offset-100]
+                            + self.tokenizer(f".<|im_end|><|endoftext|><|endoftext|>", add_special_tokens=False)["input_ids"], dtype=torch.long)), tokenizer),
+                'len_context': len_context
+            })
 
 
     def __len__(self):
