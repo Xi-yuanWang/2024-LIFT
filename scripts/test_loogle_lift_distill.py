@@ -81,7 +81,7 @@ class DistillDataset(Dataset):
         for _ in range(1):
             self.data.append({
                 "basetext": context,
-                'input_ids': removeendtoken(torch.randint(0, tokenizer.vocab_size - 1, (len_offset,))),
+                'input_ids': torch.randint(0, tokenizer.vocab_size - 1, (len_offset,)),
                 'len_context': len_context,
                 })
         for i in range(0, len_context, len_offset):
@@ -89,7 +89,7 @@ class DistillDataset(Dataset):
                 "basetext": context,
                 'input_ids': removeendtoken(randomreplace(randomdropout(torch.tensor(
                             self.tokenizer(f"\n Based on the article \"{title}\", please recite its content<|im_end|>\n<|im_start|>assistant\nSure, the article is \"", add_special_tokens=False)["input_ids"]
-                            +input_ids[i:min(i+len_offset, len_context)], dtype=torch.long)), tokenizer)),
+                            +input_ids[i:min(i+len_offset, len_context)], dtype=torch.long)), tokenizer), tokenizer),
                 'len_context': len_context
             })
         for i in range(0, len_context-200, len_offset):
