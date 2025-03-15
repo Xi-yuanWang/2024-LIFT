@@ -160,7 +160,6 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
         query = query.contiguous()
         key = key.contiguous()
         value = value.contiguous()
-        assert not is_causal 
         attn_output = torch.nn.functional.scaled_dot_product_attention(
             query,
             key,
@@ -198,10 +197,10 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 v_upper = v[:, :, len_context:]
                 kvcache.post_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q_upper, k_upper, v_upper, 0.0, scaling, True)
             kvcache.cpu()
-            data.append((kvcache, len_context))
+            kvcaches.append((kvcache, len_context))
         torch.cuda.empty_cache()
     import random
-    for _ in tqdm(range()):
+    for _ in tqdm(range(kv_epoches)):
         random.shuffle(kvcaches)
         for kvcache, len_context in kvcaches:
             if True:

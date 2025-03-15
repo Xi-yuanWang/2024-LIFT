@@ -13,7 +13,7 @@ prepare
 # python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_distill.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.GLU.distill.qadistillx.jsonl \
+    --output_file outputs/subset.GLU.distill.qadistill.simplegate.jsonl \
     --output_dir models/qwendistill.GLU \
     --overwrite False \
     --num_syn_qa 0 \
