@@ -199,7 +199,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
 
             for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):#kvcache.query_cache:
                 q, k, v = kvcache.query_cache[idx].to(model.device), kvcache.key_cache[idx].to(model.device), kvcache.value_cache[idx].to(model.device)
-                print(q.shape, k.shape, v.shape)
+                # print(q.shape, k.shape, v.shape)
                 k_lower = k[:, :, :len_context]#k[:, :, :len_context]
                 v_lower = v[:, :, :len_context]
                 kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q, k_lower, v_lower, 0.0, scaling, False).cpu()

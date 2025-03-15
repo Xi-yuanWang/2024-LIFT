@@ -31,7 +31,7 @@ class DistillCache(DynamicCache):
         if idx not in self.attnout_cache:
             self.attnout_cache[idx] = o.cpu()
         else:
-            self.attnout_cache[idx] = torch.concat((self.attnout_cache[idx], o.cpu()), dim=2)
+            self.attnout_cache[idx] = torch.concat((self.attnout_cache[idx], o.cpu()), dim=1)
 
     def cpu(self):
         for i in range(len(self.key_cache)):
@@ -122,7 +122,7 @@ class GMQwen2Attention(Qwen2Attention):
         super().__init__(config, layer_idx)
         assert self.is_causal, "implemented only for casual LLM"
         self.num_key_value_heads = self.config.num_key_value_heads
-        glu = MemGLU(4, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
+        glu = MemGLU(6, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
         self.mem_proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
         self.gate_proj = GLUGate(2, self.scaling, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=True)
 
@@ -431,8 +431,9 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
 
             if self.layer_start_idx<= layer_idx <self.config.num_hidden_layers-self.layer_end_idx:
                 if isinstance(past_key_values, DistillCache):
-                    past_key_values.value_cache[layer_idx].to(self.device, non_blocking=True)
-                    past_key_values.key_cache[layer_idx].to(self.device, non_blocking=True)
+                    if len(past_key_values.value_cache) > layer_idx:
+                        past_key_values.value_cache[layer_idx] = past_key_values.value_cache[layer_idx].to(self.device, non_blocking=True)
+                        past_key_values.key_cache[layer_idx] = past_key_values.key_cache[layer_idx].to(self.device, non_blocking=True)
                 if self.gradient_checkpointing and self.training:
                     layer_outputs = self._gradient_checkpointing_func(
                         decoder_layer.__call__,
