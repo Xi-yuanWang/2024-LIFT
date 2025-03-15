@@ -136,6 +136,7 @@ class GMQwen2Attention(Qwen2Attention):
 
         if isinstance(past_key_value, DistillCache):
             past_key_value.query_cache[self.layer_idx] = query_states
+            memgate = None
         else:
             mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states, key_states)
 
