@@ -172,6 +172,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
         attn_output = attn_output.contiguous()
         return attn_output
     
+    from copy import deepcopy
     model.eval()
     torch.cuda.empty_cache()  # Manually release memory
     optimizer = torch.optim.AdamW(model.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
@@ -181,14 +182,24 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
     num_key_value_groups = basemodel.layers[0].self_attn.num_key_value_groups
     from tqdm import tqdm
     kvcaches = []
-    for data in dataset:
-        with torch.no_grad():
-            input_id = data["input_ids"].unsqueeze(0).to(model.device)
-            len_context = data["len_context"]
-            kvcache: DistillCache = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=DistillCache(), use_cache=True).past_key_values
+
+    torch.cuda.empty_cache()
+    with torch.no_grad():
+        basetext = dataset[0]["basetext"].unsqueeze(0).to(model.device)
+        len_context = dataset[0]["len_context"]
+        basecache: DistillCache = model.forward(input_ids=basetext, gate_mask=torch.zeros_like(basetext), past_key_values=DistillCache(), use_cache=True).past_key_values
+        basecache.cpu()
+        torch.cuda.empty_cache()
+        for data in dataset:
             torch.cuda.empty_cache()
+            input_id = data["input_ids"].unsqueeze(0).to(model.device)
+            kvcache: DistillCache = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=deepcopy(basecache), use_cache=True).past_key_values
+            kvcache.cpu()
+            torch.cuda.empty_cache()
+
             for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):#kvcache.query_cache:
                 q, k, v = kvcache.query_cache[idx].to(model.device), kvcache.key_cache[idx].to(model.device), kvcache.value_cache[idx].to(model.device)
+                print(q.shape, k.shape, v.shape)
                 k_lower = k[:, :, :len_context]#k[:, :, :len_context]
                 v_lower = v[:, :, :len_context]
                 kvcache.virtual_attnout_cache[idx] = sdpa_attention_forward(num_key_value_groups, q, k_lower, v_lower, 0.0, scaling, False).cpu()
@@ -235,7 +246,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                     (tgatel1loss + tgatecosloss).backward()
                     gatel1loss.append(tgatel1loss.detach())
                     gatecosloss.append(tgatecosloss.detach())
-                    
+                    kvcache.cpu()
                 meml1loss = torch.stack(meml1loss)
                 memcosloss = torch.stack(memcosloss)
                 gatel1loss = torch.stack(gatel1loss)
@@ -247,7 +258,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
-            kvcache.cpu()
+            
             torch.cuda.empty_cache()
     return model, optimizer
 

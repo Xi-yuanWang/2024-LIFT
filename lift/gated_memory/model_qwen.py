@@ -21,6 +21,18 @@ class DistillCache(DynamicCache):
         self.virtual_attnout_cache = {}
         self.post_attnout_cache = {}
 
+    def updateq(self, idx, q):
+        if idx not in self.query_cache:
+            self.query_cache[idx] = q.cpu()
+        else:
+            self.query_cache[idx] = torch.concat((self.query_cache[idx], q.cpu()), dim=2)
+
+    def updateattnout(self, idx, o):
+        if idx not in self.attnout_cache:
+            self.attnout_cache[idx] = o.cpu()
+        else:
+            self.attnout_cache[idx] = torch.concat((self.attnout_cache[idx], o.cpu()), dim=2)
+
     def cpu(self):
         for i in range(len(self.key_cache)):
             self.key_cache[i] = self.key_cache[i].cpu()
@@ -34,6 +46,20 @@ class DistillCache(DynamicCache):
             self.virtual_attnout_cache[key] = self.virtual_attnout_cache[key].cpu()
         for key in self.post_attnout_cache:
             self.post_attnout_cache[key] = self.post_attnout_cache[key].cpu()
+
+    def to(self, device):
+        for i in range(len(self.key_cache)):
+            self.key_cache[i] = self.key_cache[i].to(device)
+        for i in range(len(self.value_cache)):
+            self.value_cache[i] = self.value_cache[i].to(device)
+        for key in self.query_cache:
+            self.query_cache[key] = self.query_cache[key].to(device)
+        for key in self.attnout_cache:
+            self.attnout_cache[key] = self.attnout_cache[key].to(device)
+        for key in self.virtual_attnout_cache:
+            self.virtual_attnout_cache[key] = self.virtual_attnout_cache[key].to(device)
+        for key in self.post_attnout_cache:
+            self.post_attnout_cache[key] = self.post_attnout_cache[key].to(device)
     
     def query_to(self, dev):
         for key in self.query_cache:
@@ -137,7 +163,7 @@ class GMQwen2Attention(Qwen2Attention):
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         if isinstance(past_key_value, DistillCache):
-            past_key_value.query_cache[self.layer_idx] = query_states
+            past_key_value.updateq(self.layer_idx, query_states)
             memgate = None
         else:
             mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states, key_states)
@@ -172,7 +198,7 @@ class GMQwen2Attention(Qwen2Attention):
             **kwargs,
         )
         if isinstance(past_key_value, DistillCache):
-            past_key_value.attnout_cache[self.layer_idx] = attn_output
+            past_key_value.updateattnout(self.layer_idx, attn_output)
             past_key_value.cpu()
         else:
             memgate2 = (memgate * gate_mask.to(memgate.dtype).unsqueeze(-2).unsqueeze(-1)).transpose(1, 2)
@@ -404,6 +430,9 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
                 all_hidden_states += (hidden_states,)
 
             if self.layer_start_idx<= layer_idx <self.config.num_hidden_layers-self.layer_end_idx:
+                if isinstance(past_key_values, DistillCache):
+                    past_key_values.value_cache[layer_idx].to(self.device, non_blocking=True)
+                    past_key_values.key_cache[layer_idx].to(self.device, non_blocking=True)
                 if self.gradient_checkpointing and self.training:
                     layer_outputs = self._gradient_checkpointing_func(
                         decoder_layer.__call__,
@@ -437,6 +466,7 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
                     layer_outputs = layer_outputs[:-1]
                 if isinstance(past_key_values, DistillCache):
                     torch.cuda.empty_cache()
+                    past_key_values.cpu()
             else:
                 if self.gradient_checkpointing and self.training:
                     layer_outputs = self._gradient_checkpointing_func(
