@@ -136,8 +136,8 @@ class GMQwen2Attention(Qwen2Attention):
 
         if isinstance(past_key_value, DistillCache):
             past_key_value.query_cache[self.layer_idx] = query_states
-
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states, key_states)
+        else:
+            mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states, key_states)
 
         sliding_window = None
         if (
@@ -170,9 +170,10 @@ class GMQwen2Attention(Qwen2Attention):
         )
         if isinstance(past_key_value, DistillCache):
             past_key_value.attnout_cache[self.layer_idx] = attn_output
-        memgate2 = (memgate * gate_mask.to(memgate.dtype).unsqueeze(-2).unsqueeze(-1)).transpose(1, 2)
-        mem2 = mem.transpose(1, 2)
-        attn_output = (1-memgate2) * attn_output + memgate2 * mem2
+        else:
+            memgate2 = (memgate * gate_mask.to(memgate.dtype).unsqueeze(-2).unsqueeze(-1)).transpose(1, 2)
+            mem2 = mem.transpose(1, 2)
+            attn_output = (1-memgate2) * attn_output + memgate2 * mem2
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights, memgate
