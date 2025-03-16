@@ -81,10 +81,12 @@ class MemGLU(nn.Module):
         self.num_layer = num_layer
         self.proj1 = nn.ModuleList([nn.Sequential(GroupedLinear(*linargs, **linkwargs), nn.Identity(), nn.SiLU(inplace=True)) for _ in range(num_layer)])
         self.proj2 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
+        self.norm = MyLayerNorm()
 
     def forward(self, x):
         for i in range(self.num_layer):
-            x = x + self.proj1[i](x) * self.proj2[i](x)
+            normedx = self.norm(x)
+            x = x + self.proj1[i](normedx) * self.proj2[i](normedx)
         return x
 
 
