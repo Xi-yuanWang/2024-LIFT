@@ -205,7 +205,6 @@ class GMQwen2Attention(Qwen2Attention):
         )
         if isinstance(past_key_value, DistillCache):
             past_key_value.updateattnout(self.layer_idx, attn_output)
-            past_key_value.cpu()
         else:
             memgate2 = (memgate * gate_mask.to(memgate.dtype).unsqueeze(-2).unsqueeze(-1)).transpose(1, 2)
             mem2 = mem.transpose(1, 2)
@@ -472,8 +471,9 @@ class GMQwen2Model(GMQwen2PreTrainedModel):
                     memgates.append(layer_outputs[-1])
                     layer_outputs = layer_outputs[:-1]
                 if isinstance(past_key_values, DistillCache):
+                    past_key_values.value_cache[layer_idx] = past_key_values.value_cache[layer_idx].cpu()
+                    past_key_values.key_cache[layer_idx] = past_key_values.key_cache[layer_idx].cpu()
                     torch.cuda.empty_cache()
-                    past_key_values.cpu()
             else:
                 if self.gradient_checkpointing and self.training:
                     layer_outputs = self._gradient_checkpointing_func(
