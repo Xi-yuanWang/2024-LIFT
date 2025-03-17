@@ -397,8 +397,8 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
-            del dataloader, dataset
             print(f"mem {idx} epoch {_} {l1loss.item():.3f} {cosloss.item():.3f}", flush=True)
+        del dataloader, dataset
         torch.cuda.empty_cache()
 
     for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):

@@ -23,8 +23,8 @@ python scripts/test_loogle_lift_distill2.py \
     --model_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0GLUg2m6-Qwen2.5-32B-Instruct \
     --model_max_length 32000 \
     --block_size 256 \
-    --len_segment 16 \
-    --len_offset 8 \
+    --len_segment 17 \
+    --len_offset 16 \
     --use_gated_memory True \
     --load_in_4bit True \
     --use_icl False \
