@@ -124,7 +124,7 @@ class GMQwen2Attention(Qwen2Attention):
         super().__init__(config, layer_idx)
         assert self.is_causal, "implemented only for casual LLM"
         self.num_key_value_heads = self.config.num_key_value_heads
-        glu = MemGLU(4, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
+        glu = MemGLU(6, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
         self.mem_proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
         self.gate_proj = GLUGate(2, self.scaling, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=True)
 
