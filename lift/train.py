@@ -332,7 +332,7 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
         basecache: DistillCache = model.forward(input_ids=basetext, gate_mask=torch.zeros_like(basetext), past_key_values=DistillCache(), use_cache=True).past_key_values
         basecache.cpu()
         torch.cuda.empty_cache()
-        for data in dataset:
+        for data in tqdm(dataset, desc="get data"):
             torch.cuda.empty_cache()
             input_id = data["input_ids"].unsqueeze(0).to(model.device)
             kvcache: DistillCache = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=deepcopy(basecache), use_cache=True).past_key_values
@@ -386,7 +386,7 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
         optimizer = torch.optim.AdamW(memproj.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, (kv_epoches//10)*len(dataloader))
         dataloader = torch.utils.data.DataLoader(q2vattn[idx], batch_size=16384, shuffle=True, pin_memory=True)
-        for _ in tqdm(range(kv_epoches)):
+        for _ in tqdm(range(kv_epoches), desc=f"mem {idx}"):
             for q, vattn in dataloader:
                 q: torch.Tensor = q.to(model.device, non_blocking=True)
                 vattn: torch.Tensor = vattn.to(model.device, non_blocking=True)
@@ -407,7 +407,7 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
         optimizer = torch.optim.AdamW(gateproj.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, (kv_epoches//10)*len(dataloader))
         dataloader = torch.utils.data.DataLoader(q2vpaattn[idx], batch_size=16384, shuffle=True, pin_memory=True)
-        for _ in tqdm(range(kv_epoches)):
+        for _ in tqdm(range(kv_epoches), desc=f"gate {idx}"):
             for q, vattn, pattn, attn in q2vpaattn:
                 q: torch.Tensor = q.to(model.device, non_blocking=True)
                 vattn: torch.Tensor = vattn.to(model.device, non_blocking=True)
