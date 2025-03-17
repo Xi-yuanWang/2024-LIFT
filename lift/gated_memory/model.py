@@ -48,6 +48,7 @@ class GroupedLinear(nn.Module):
         self.reset_parameters()
         self.num_repeat = num_repeat
         self.group_size = group_size
+        assert not tailnorm
         self.norm = MyLayerNorm() if tailnorm else nn.Identity() 
 
     def reset_parameters(self) -> None:
