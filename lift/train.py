@@ -371,25 +371,23 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
         q2vattn[idx][0] = torch.concat(q2vattn[idx][0], dim=2).transpose(0, 2)
         q2vattn[idx][1] = torch.concat(q2vattn[idx][1], dim=2).transpose(0, 2)
 
-        q2vattn[idx] = torch.utils.data.TensorDataset(q2vattn[idx][0], q2vattn[idx][1])
-
         q2vpaattn[idx][0] = torch.concat(q2vpaattn[idx][0], dim=2).transpose(0, 2)
         q2vpaattn[idx][1] = torch.concat(q2vpaattn[idx][1], dim=2).transpose(0, 2)
         q2vpaattn[idx][2] = torch.concat(q2vpaattn[idx][2], dim=2).transpose(0, 2)
         q2vpaattn[idx][3] = torch.concat(q2vpaattn[idx][3], dim=2).transpose(0, 2)
 
-        q2vpaattn[idx] = torch.utils.data.TensorDataset(q2vpaattn[idx][0], q2vpaattn[idx][1], q2vpaattn[idx][2], q2vpaattn[idx][3])
 
 
     for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
         memproj = basemodel.layers[idx].self_attn.mem_proj
         optimizer = torch.optim.AdamW(memproj.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
-        dataloader = torch.utils.data.DataLoader(q2vattn[idx], batch_size=16384, shuffle=True, pin_memory=True)
+        dataset = torch.utils.data.TensorDataset(q2vattn[idx][0].to(model.device), q2vattn[idx][1].to(model.device))
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=16384, shuffle=True)#, pin_memory=True)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, (kv_epoches//10)*len(dataloader))
         for _ in tqdm(range(kv_epoches), desc=f"mem {idx}"):
             for q, vattn in dataloader:
-                q: torch.Tensor = q.transpose(0, 2).to(model.device, non_blocking=True)
-                vattn: torch.Tensor = vattn.transpose(0, 2).to(model.device, non_blocking=True)
+                q: torch.Tensor = q.transpose(0, 2)
+                vattn: torch.Tensor = vattn.transpose(0, 2)
                 memout: torch.Tensor = memproj(q)
                 l1loss: torch.Tensor = (memout - vattn).abs().flatten()
                 cosloss: torch.Tensor = 1 - torch.nn.CosineSimilarity(dim=-1)(memout, vattn).flatten()
@@ -399,20 +397,22 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
-            print(f"mem {idx} epoch {_} {l1loss.item():.3f} {cosloss.item():.3f}")
+            del dataloader, dataset
+            print(f"mem {idx} epoch {_} {l1loss.item():.3f} {cosloss.item():.3f}", flush=True)
         torch.cuda.empty_cache()
 
     for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
         gateproj = basemodel.layers[idx].self_attn.gate_proj
         optimizer = torch.optim.AdamW(gateproj.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
-        dataloader = torch.utils.data.DataLoader(q2vpaattn[idx], batch_size=16384, shuffle=True, pin_memory=True)
+        dataset = torch.utils.data.TensorDataset(q2vpaattn[idx][0].to(model.device), q2vpaattn[idx][1].to(model.device), q2vpaattn[idx][2].to(model.device), q2vpaattn[idx][3].to(model.device))
+        dataloader = torch.utils.data.DataLoader(q2vpaattn[idx], batch_size=16384, shuffle=True)#, pin_memory=True)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, (kv_epoches//10)*len(dataloader))
         for _ in tqdm(range(kv_epoches), desc=f"gate {idx}"):
-            for q, vattn, pattn, attn in q2vpaattn:
-                q: torch.Tensor = q.transpose(0, 2).to(model.device, non_blocking=True)
-                vattn: torch.Tensor = vattn.transpose(0, 2).to(model.device, non_blocking=True)
-                pattn: torch.Tensor = pattn.transpose(0, 2).to(model.device, non_blocking=True)
-                attn: torch.Tensor = attn.transpose(0, 2).to(model.device, non_blocking=True)
+            for q, vattn, pattn, attn in dataloader:
+                q: torch.Tensor = q.transpose(0, 2)
+                vattn: torch.Tensor = vattn.transpose(0, 2)
+                pattn: torch.Tensor = pattn.transpose(0, 2)
+                attn: torch.Tensor = attn.transpose(0, 2)
                 gateout: torch.Tensor = gateproj(q)
                 predout = pattn + gateout * (vattn-pattn)
                 l1loss: torch.Tensor = (predout - attn).abs().flatten()
@@ -423,7 +423,8 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
-            print(f"gate {idx} epoch {_} {l1loss.item():.3f} {cosloss.item():.3f}")
+            print(f"gate {idx} epoch {_} {l1loss.item():.3f} {cosloss.item():.3f}", flush=True)
+        del dataloader, dataset
         torch.cuda.empty_cache()
     return model, optimizer
 
