@@ -384,12 +384,12 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
     for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
         memproj = basemodel.layers[idx].self_attn.mem_proj
         optimizer = torch.optim.AdamW(memproj.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, (kv_epoches//10)*len(dataloader))
         dataloader = torch.utils.data.DataLoader(q2vattn[idx], batch_size=16384, shuffle=True, pin_memory=True)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, (kv_epoches//10)*len(dataloader))
         for _ in tqdm(range(kv_epoches)):
             for q, vattn in dataloader:
-                q: torch.Tensor = q.to(model.device, non_blocking=True)
-                vattn: torch.Tensor = vattn.to(model.device, non_blocking=True)
+                q: torch.Tensor = q.transpose(0, 2).to(model.device, non_blocking=True)
+                vattn: torch.Tensor = vattn.transpose(0, 2).to(model.device, non_blocking=True)
                 memout: torch.Tensor = memproj(q)
                 l1loss: torch.Tensor = (memout - vattn).abs().flatten()
                 cosloss: torch.Tensor = 1 - torch.nn.CosineSimilarity(dim=-1)(memout, vattn).flatten()
@@ -405,14 +405,14 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
     for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
         gateproj = basemodel.layers[idx].self_attn.gate_proj
         optimizer = torch.optim.AdamW(gateproj.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, (kv_epoches//10)*len(dataloader))
         dataloader = torch.utils.data.DataLoader(q2vpaattn[idx], batch_size=16384, shuffle=True, pin_memory=True)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, (kv_epoches//10)*len(dataloader))
         for _ in tqdm(range(kv_epoches)):
             for q, vattn, pattn, attn in q2vpaattn:
-                q: torch.Tensor = q.to(model.device, non_blocking=True)
-                vattn: torch.Tensor = vattn.to(model.device, non_blocking=True)
-                pattn: torch.Tensor = pattn.to(model.device, non_blocking=True)
-                attn: torch.Tensor = attn.to(model.device, non_blocking=True)
+                q: torch.Tensor = q.transpose(0, 2).to(model.device, non_blocking=True)
+                vattn: torch.Tensor = vattn.transpose(0, 2).to(model.device, non_blocking=True)
+                pattn: torch.Tensor = pattn.transpose(0, 2).to(model.device, non_blocking=True)
+                attn: torch.Tensor = attn.transpose(0, 2).to(model.device, non_blocking=True)
                 gateout: torch.Tensor = gateproj(q)
                 predout = pattn + gateout * (vattn-pattn)
                 l1loss: torch.Tensor = (predout - attn).abs().flatten()
