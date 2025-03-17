@@ -12,9 +12,9 @@
 source utils.sh
 prepare
 #python lift/gated_memory/utils.py
-python scripts/test_loogle_lift_distill.py \
+python scripts/test_loogle_lift_distill2.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.GLU.distill.full.noYaRN.normedGLU.g2m6.jsonl \
+    --output_file outputs/subset.GLU.distill.full.noYaRN.normedGLU.g2m6.nores.distill2.jsonl \
     --output_dir models/qwendistill.GLU \
     --overwrite False \
     --num_syn_qa 0 \
@@ -24,7 +24,7 @@ python scripts/test_loogle_lift_distill.py \
     --model_max_length 32000 \
     --block_size 256 \
     --len_segment 16 \
-    --len_offset 16 \
+    --len_offset 8 \
     --use_gated_memory True \
     --load_in_4bit True \
     --use_icl False \

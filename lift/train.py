@@ -14,7 +14,8 @@ from typing import Optional, Type, Any, List, Dict
 from copy import deepcopy
 from .gated_memory.model_qwen import GMQwen2ForCausalLM, DistillCache
 import os.path as osp
-
+from tqdm import tqdm
+from copy import deepcopy
 def my_collator(features: List[Dict[str, torch.Tensor]], return_tensors="pt") -> Dict[str, torch.Tensor]:
     """
     Very simple data collator that simply collates batches of dict-like objects and performs special handling for
@@ -260,6 +261,170 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
                 optimizer.zero_grad()
             
             torch.cuda.empty_cache()
+    return model, optimizer
+
+
+
+def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: PreTrainedTokenizer, training_args: TrainingArguments, kv_epoches: int=0, gather_batches: bool=True):
+    """Fine-tune the model and the corresponding tokenizer.
+    Args:
+        model (PreTrainedModel): the model to fine-tune.
+        dataset (ContextDataset): the dataset for fine-tuning.
+        tokenizer (PreTrainedTokenizer): the pretrained tokenizer.
+        training_args (TrainingArguments): the huggingface training arguments.
+        involve_qa_epochs (int): OPTIONAL, default to `0`; the number of epochs to involve QA pairs.
+        gather_batches (bool): OPTIONAL, default to `True`; if `gather_batches=True`, it will force the trainer to update the model only once every epoch; it may lead to more stable gradients.
+    Returns:
+        model_tokenizer_pair (tuple[PreTrainedModel, PreTrainedTokenizer]): the fine-tuned model and the corresponding tokenizer.
+    """
+
+    def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+        """
+        This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+        num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+        """
+        batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+        if n_rep == 1:
+            return hidden_states
+        hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+        return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+    def sdpa_attention_forward(
+        num_key_value_groups: int,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        dropout: float = 0.0,
+        scaling: Optional[float] = None,
+        is_causal: Optional[bool] = False,
+    ):
+        key = repeat_kv(key, num_key_value_groups)
+        value = repeat_kv(value, num_key_value_groups)
+
+        query = query.contiguous()
+        key = key.contiguous()
+        value = value.contiguous()
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attn_mask=None,
+            dropout_p=dropout,
+            scale=scaling,
+            is_causal=is_causal,
+        )
+        attn_output = attn_output.contiguous()
+        return attn_output
+    
+    model.eval()
+    torch.cuda.empty_cache()  # Manually release memory
+    basemodel = model.model.model
+    scaling = basemodel.layers[0].self_attn.scaling
+    num_key_value_groups = basemodel.layers[0].self_attn.num_key_value_groups
+    
+    q2vattn = {idx: [[], []] for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx)}
+    q2vpaattn = {idx: [[], [], [], []] for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx)}
+
+    torch.cuda.empty_cache()
+    with torch.no_grad():
+        basetext = dataset[0]["basetext"].unsqueeze(0).to(model.device)
+        len_context = dataset[0]["len_context"]
+        basecache: DistillCache = model.forward(input_ids=basetext, gate_mask=torch.zeros_like(basetext), past_key_values=DistillCache(), use_cache=True).past_key_values
+        basecache.cpu()
+        torch.cuda.empty_cache()
+        for data in dataset:
+            torch.cuda.empty_cache()
+            input_id = data["input_ids"].unsqueeze(0).to(model.device)
+            kvcache: DistillCache = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=deepcopy(basecache), use_cache=True).past_key_values
+            kvcache.cpu()
+            torch.cuda.empty_cache()
+
+            for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):#kvcache.query_cache:
+                def execcache():
+                    q, k, v, attnout = kvcache.query_cache[idx], kvcache.key_cache[idx], kvcache.value_cache[idx], kvcache.attnout_cache[idx]
+                    q_upper = q[:, :, len_context:]
+                    k_lower = k[:, :, :len_context]
+                    v_lower = v[:, :, :len_context]
+                    k_upper = k[:, :, len_context:]
+                    v_upper = v[:, :, len_context:]
+                    attnout_upper = attnout.transpose(1, 2)[:, :, len_context:]
+                    if len(q2vattn[idx][0]) > 0:
+                        q = q_upper
+                    
+                    vattnout = sdpa_attention_forward(num_key_value_groups, q.to(model.device), k_lower.to(model.device), v_lower.to(model.device), 0.0, scaling, False).cpu()
+                    if len(q2vattn[idx][0]) > 0:
+                        vattnout_upper = vattnout
+                    else:
+                        vattnout_upper = vattnout[:, :, len_context:]
+                    q2vattn[idx][0].append(q)
+                    q2vattn[idx][1].append(vattnout)
+                    
+                    q2vpaattn[idx][0].append(q_upper)
+                    q2vpaattn[idx][1].append(vattnout_upper)
+                    q2vpaattn[idx][2].append(sdpa_attention_forward(num_key_value_groups, q_upper.to(model.device), k_upper.to(model.device), v_upper.to(model.device), 0.0, scaling, True).cpu())
+                    q2vpaattn[idx][3].append(attnout_upper)
+                execcache()
+                torch.cuda.empty_cache()
+            del kvcache
+        del basecache
+    for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
+        q2vattn[idx][0] = torch.concat(q2vattn[idx][0], dim=2).transpose(0, 2)
+        q2vattn[idx][1] = torch.concat(q2vattn[idx][1], dim=2).transpose(0, 2)
+
+        q2vattn[idx] = torch.utils.data.TensorDataset(q2vattn[idx][0], q2vattn[idx][1])
+
+        q2vpaattn[idx][0] = torch.concat(q2vpaattn[idx][0], dim=2).transpose(0, 2)
+        q2vpaattn[idx][1] = torch.concat(q2vpaattn[idx][1], dim=2).transpose(0, 2)
+        q2vpaattn[idx][2] = torch.concat(q2vpaattn[idx][2], dim=2).transpose(0, 2)
+        q2vpaattn[idx][3] = torch.concat(q2vpaattn[idx][3], dim=2).transpose(0, 2)
+
+        q2vpaattn[idx] = torch.utils.data.TensorDataset(q2vpaattn[idx][0], q2vpaattn[idx][1], q2vpaattn[idx][2], q2vpaattn[idx][3])
+
+
+    for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
+        memproj = basemodel.layers[idx].self_attn.mem_proj
+        optimizer = torch.optim.AdamW(memproj.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, (kv_epoches//10)*len(dataloader))
+        dataloader = torch.utils.data.DataLoader(q2vattn[idx], batch_size=16384, shuffle=True, pin_memory=True)
+        for _ in tqdm(range(kv_epoches)):
+            for q, vattn in dataloader:
+                q: torch.Tensor = q.to(model.device, non_blocking=True)
+                vattn: torch.Tensor = vattn.to(model.device, non_blocking=True)
+                memout: torch.Tensor = memproj(q)
+                l1loss: torch.Tensor = (memout - vattn).abs().flatten()
+                cosloss: torch.Tensor = 1 - torch.nn.CosineSimilarity(dim=-1)(memout, vattn).flatten()
+                l1loss = torch.sum(l1loss.clamp_min_(1e-2) * torch.softmax(l1loss.detach(), dim=0))
+                cosloss = torch.sum(cosloss.clamp_min_(3e-3) * torch.softmax(cosloss.detach(), dim=0))
+                (l1loss + cosloss).backward()
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+            print(f"mem {idx} epoch {_} {l1loss.item():.3f} {cosloss.item():.3f}")
+        torch.cuda.empty_cache()
+
+    for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
+        gateproj = basemodel.layers[idx].self_attn.gate_proj
+        optimizer = torch.optim.AdamW(gateproj.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, (kv_epoches//10)*len(dataloader))
+        dataloader = torch.utils.data.DataLoader(q2vpaattn[idx], batch_size=16384, shuffle=True, pin_memory=True)
+        for _ in tqdm(range(kv_epoches)):
+            for q, vattn, pattn, attn in q2vpaattn:
+                q: torch.Tensor = q.to(model.device, non_blocking=True)
+                vattn: torch.Tensor = vattn.to(model.device, non_blocking=True)
+                pattn: torch.Tensor = pattn.to(model.device, non_blocking=True)
+                attn: torch.Tensor = attn.to(model.device, non_blocking=True)
+                gateout: torch.Tensor = gateproj(q)
+                predout = pattn + gateout * (vattn-pattn)
+                l1loss: torch.Tensor = (predout - attn).abs().flatten()
+                cosloss: torch.Tensor = 1 - torch.nn.CosineSimilarity(dim=-1)(predout, attn).flatten()
+                l1loss = torch.sum(l1loss.clamp_min_(1e-2) * torch.softmax(l1loss.detach(), dim=0))
+                cosloss = torch.sum(cosloss.clamp_min_(3e-3) * torch.softmax(cosloss.detach(), dim=0))
+                (l1loss + cosloss).backward()
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+            print(f"gate {idx} epoch {_} {l1loss.item():.3f} {cosloss.item():.3f}")
+        torch.cuda.empty_cache()
     return model, optimizer
 
 

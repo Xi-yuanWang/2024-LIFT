@@ -76,17 +76,21 @@ class ResSequential(nn.Module):
         return x
 
 class MemGLU(nn.Module):
-    def __init__(self, num_layer: int, *linargs, **linkwargs) -> None:
+    def __init__(self, num_layer: int, res: bool, *linargs, **linkwargs) -> None:
         super().__init__()
         self.num_layer = num_layer
         self.proj1 = nn.ModuleList([nn.Sequential(GroupedLinear(*linargs, **linkwargs), nn.Identity(), nn.SiLU(inplace=True)) for _ in range(num_layer)])
         self.proj2 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
         self.norm = MyLayerNorm()
+        self.res = res
 
     def forward(self, x):
         for i in range(self.num_layer):
             normedx = self.norm(x)
-            x = x + self.proj1[i](normedx) * self.proj2[i](normedx)
+            if self.res:
+                x = x + self.proj1[i](normedx) * self.proj2[i](normedx)
+            else:
+                x = self.proj1[i](normedx) * self.proj2[i](normedx)
         return x
 
 
@@ -98,8 +102,8 @@ class GLUGate(nn.Module):
         self.num_key_value_heads = num_key_value_heads
         self.scaling = scaling
         self.head_dim = linargs[0]
-        glu = MemGLU(num_layer, num_key_value_groups, num_key_value_heads, *linargs, **linkwargs)
-        self.proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 1, bias=False))
+        glu = MemGLU(num_layer, False, num_key_value_groups, num_key_value_heads, *linargs, **linkwargs)
+        self.proj = nn.Sequential(glu, False, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 1, bias=False))
         
     
     def forward(self, queries: torch.Tensor, keys: torch.Tensor):
