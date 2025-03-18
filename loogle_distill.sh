@@ -35,7 +35,6 @@ python scripts/test_loogle_lift_distill2.py \
     --involve_qa_epochs 0 \
     --num_train_epochs 100 \
     --kv_epochs 1000 \
-    --distilldatapath distilldata/subset.32.8.pt \
     --remove_unused_columns True \
     --report_to none \
     --per_device_train_batch_size 1 \
