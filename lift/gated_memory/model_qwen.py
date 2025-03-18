@@ -10,7 +10,7 @@ import torch
 from torch import nn
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Config, Cache, FlashAttentionKwargs, Unpack, Qwen2Attention, apply_rotary_pos_emb, eager_attention_forward, logger, ALL_ATTENTION_FUNCTIONS, Qwen2MLP, Qwen2RMSNorm, Qwen2DecoderLayer, PreTrainedModel, Qwen2RotaryEmbedding, BaseModelOutputWithPast, DynamicCache, StaticCache, SlidingWindowCache, AttentionMaskConverter, LossKwargs, GenerationMixin, CausalLMOutputWithPast
 from lift.gated_memory.model import GroupedLinear, MyRMSNorm, BiasScale, BiasSigmoid, MyLayerNorm
-
+import torch.nn.functional as F
 
 class DistillCache(DynamicCache):
     
@@ -82,7 +82,7 @@ class MemGLU(nn.Module):
         # For GLU
         #self.proj1 = nn.ModuleList([nn.Sequential(GroupedLinear(*linargs, **linkwargs), nn.Identity(), nn.SiLU(inplace=True)) for _ in range(num_layer)]) 
         # For PowerMLP
-        self.proj1 = nn.ModuleList([nn.Sequential(nn.SiLU(), GroupedLinear(*linargs, **linkwargs)) for _ in range(num_layer)])
+        self.proj1 = nn.ModuleList([nn.Sequential(GroupedLinear(*linargs, **linkwargs)) for _ in range(num_layer)])
         self.proj2 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
         self.norm = MyLayerNorm()
         self.res = res
@@ -101,9 +101,9 @@ class MemGLU(nn.Module):
         for i in range(self.num_layer):
             normedx = self.norm(x)
             if self.res:
-                x = x + self.proj1[i](normedx) + torch.relu(self.proj2[i](normedx))**3
+                x = x + self.proj1[i](F.silu(normedx)) + torch.relu(self.proj2[i](normedx))**3
             else:
-                x = self.proj1[i](normedx) + torch.relu(self.proj2[i](normedx))**3
+                x = self.proj1[i](F.silu(normedx)) + torch.relu(self.proj2[i](normedx))**3
         return x
 
 
