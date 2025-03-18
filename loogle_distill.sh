@@ -14,8 +14,8 @@ prepare
 #python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_distill2.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.PowerMLP.distill2.jsonl \
-    --output_dir models/qwendistill.PowerMLP.distill2 \
+    --output_file outputs/subset.reGLU.distill2.jsonl \
+    --output_dir models/qwendistill.reGLU.wd1e-3.distill2 \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \
@@ -39,7 +39,7 @@ python scripts/test_loogle_lift_distill2.py \
     --report_to none \
     --per_device_train_batch_size 1 \
     --learning_rate 3e-3 \
-    --weight_decay 1e-1 \
+    --weight_decay 1e-3 \
     --adam_beta1 0.9 \
     --adam_beta2 0.98 \
     --adam_epsilon 1e-8 \
