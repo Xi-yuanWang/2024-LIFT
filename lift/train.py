@@ -405,7 +405,7 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
         ret = torch.mean(lossmat.clamp_min(clipval))
         return ret
 
-    for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
+    for idx in range(basemodel.config.num_hidden_layers-basemodel.layer_end_idx-1, basemodel.layer_start_idx-1, -1):#range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
         memproj = basemodel.layers[idx].self_attn.mem_proj
         optimizer = torch.optim.AdamW(memproj.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
         Q, VATTN = q2vattn[idx][0].to(model.device), q2vattn[idx][1].to(model.device)
@@ -432,7 +432,7 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
         del Q, VATTN
         torch.cuda.empty_cache()
 
-    for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
+    for idx in range(basemodel.config.num_hidden_layers-basemodel.layer_end_idx-1, basemodel.layer_start_idx-1, -1):#range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
         gateproj = basemodel.layers[idx].self_attn.gate_proj
         optimizer = torch.optim.AdamW(gateproj.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
         Q, VATTN, PATTN, ATTN = q2vpaattn[idx][0].to(model.device), q2vpaattn[idx][1].to(model.device), q2vpaattn[idx][2].to(model.device), q2vpaattn[idx][3].to(model.device)
