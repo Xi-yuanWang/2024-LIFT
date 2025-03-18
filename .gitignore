@@ -23,3 +23,4 @@ outputs.d
 parsed.d
 *.png
 vis*
+distilldata
