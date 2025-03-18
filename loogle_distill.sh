@@ -14,8 +14,8 @@ prepare
 #python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_distill2.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.GLU.distill.full.noYaRN.normedGLU.g2m6.nores.distill2.kv1000.jsonl \
-    --output_dir models/qwendistill.GLU.distill2 \
+    --output_file outputs/subset.PowerMLP.distill2.jsonl \
+    --output_dir models/qwendistill.PowerMLP.distill2 \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \

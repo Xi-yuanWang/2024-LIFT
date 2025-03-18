@@ -28,7 +28,7 @@ def create_batch_file(client: OpenAI, input_path: str, metadata: Dict):
             for j, qa_pair in enumerate(d['qa_pairs']):
                 messages = [
                     {'role': 'system', 'content': "Given one question, there is a groundtruth and a predict_answer. Please decide whether they are the same or not in semantic. Please only output 'True' or 'False' ."},
-                    {'role': 'user', 'content': PROMPT_TEMPLATE.format(question=qa_pair['Q'], reference=qa_pair['A'], pred=qa_pair['pred2'])}
+                    {'role': 'user', 'content': PROMPT_TEMPLATE.format(question=qa_pair['Q'], reference=qa_pair['A'], pred=qa_pair['pred'])}
                 ]
                 entry = {
                     'custom_id': f'LooGLE-{i}-{j}',

@@ -79,18 +79,31 @@ class MemGLU(nn.Module):
     def __init__(self, num_layer: int, res: bool, *linargs, **linkwargs) -> None:
         super().__init__()
         self.num_layer = num_layer
-        self.proj1 = nn.ModuleList([nn.Sequential(GroupedLinear(*linargs, **linkwargs), nn.Identity(), nn.SiLU(inplace=True)) for _ in range(num_layer)])
+        # For GLU
+        #self.proj1 = nn.ModuleList([nn.Sequential(GroupedLinear(*linargs, **linkwargs), nn.Identity(), nn.SiLU(inplace=True)) for _ in range(num_layer)]) 
+        # For PowerMLP
+        self.proj1 = nn.ModuleList([nn.Sequential(nn.SiLU(), GroupedLinear(*linargs, **linkwargs)) for _ in range(num_layer)])
         self.proj2 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
         self.norm = MyLayerNorm()
         self.res = res
 
     def forward(self, x):
+        '''
+        # GLU
         for i in range(self.num_layer):
             normedx = self.norm(x)
             if self.res:
                 x = x + self.proj1[i](normedx) * self.proj2[i](normedx)
             else:
                 x = self.proj1[i](normedx) * self.proj2[i](normedx)
+        '''
+        # PowerMLP
+        for i in range(self.num_layer):
+            normedx = self.norm(x)
+            if self.res:
+                x = x + self.proj1[i](normedx) + torch.relu(self.proj2[i](normedx))**3
+            else:
+                x = self.proj1[i](normedx) + torch.relu(self.proj2[i](normedx))**3
         return x
 
 

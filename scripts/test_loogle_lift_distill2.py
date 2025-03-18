@@ -418,6 +418,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             response = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=True)
             qa_pair['pred'] = response
 
+            '''
             output2 = model.generate(
                 input_ids=input_ids,
                 gate_mask=gate_mask,
@@ -429,6 +430,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             )
             response = tokenizer.decode(output2[0][input_ids.shape[-1]:], skip_special_tokens=True)
             qa_pair['pred2'] = response
+            '''
         output_case = {
             'title': title,
             'input': context,
