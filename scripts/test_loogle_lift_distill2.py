@@ -29,6 +29,7 @@ import torch
 import tqdm
 from torch.utils.data import Dataset
 from copy import deepcopy
+import os.path as osp
 
 LIFT_ICL_PROMPT = "Given the article \"{title}\": "
 LOOGLEFORMAT_NON_ICL = "<|im_start|>user\n Based on the article \"{title}\", please answer the following question concisely and accurately: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
@@ -360,11 +361,11 @@ def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_
         for name, param in model.named_parameters():
             if param.requires_grad:
                 print(name, param.shape, param.numel())
-        model.save_pretrained(training_args.output_dir, "before_distill")
+        model.save_pretrained(osp.join(training_args.output_dir, "before_distill"))
         dataset = DistillDataset(title, context, tokenizer, model_max_length, block_size, len_segment, len_offset)
         len_context = dataset[0]["len_context"]
         model = distilltrain2(model, dataset, tokenizer, training_args, kv_epochs, gather_batches, distilldatapath)[0]
-        model.save_pretrained(training_args.output_dir, "after_distill")
+        model.save_pretrained(osp.join(training_args.output_dir, "after_distill"))
     #dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
     #model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
     return model, len_context
@@ -408,7 +409,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             output = model.generate(
                 input_ids=input_ids,
                 gate_mask=gate_mask,
-                position_ids=(torch.arange(input_ids.shape[1])+len_context).unsqueeze(0).to(model.device),
+                cache_position=(torch.arange(input_ids.shape[1])+len_context).to(model.device),
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
                 max_new_tokens=1024,

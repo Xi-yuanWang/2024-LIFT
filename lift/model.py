@@ -15,7 +15,8 @@ from typing import Optional
 from copy import deepcopy
 import torch
 from .gated_memory.model_qwen import GMQwen2ForCausalLM
-
+# We assume `peft` is available...
+from transformers.utils import find_adapter_config_file
 
 def load_tokenizer(tokenizer_name_or_path: str):
     """Load the tokenizer and set PAD_TOKEN = EOS_TOKEN.
@@ -35,7 +36,15 @@ def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8
     Returns:
         model (PreTrainedModel): the base model.
     """
+    maybe_adapter_path = find_adapter_config_file(model_name_or_path)
     if use_gated_memory:  # use_gated_memory should be checked first
+        if maybe_adapter_path:
+            peft_config = PeftConfig.from_pretrained(model_name_or_path)
+            model_base = load_base_model(peft_config.base_model_name_or_path, load_in_4bit, load_in_8bit, vocab_size, use_gated_memory)
+            model = PeftModel.from_pretrained(model_base, model_name_or_path, config=peft_config, is_trainable=True)
+            model = model.merge_and_unload()
+            return model
+
         if load_in_4bit:
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -44,11 +53,11 @@ def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8
                 bnb_4bit_compute_dtype=torch.bfloat16,
             )
             model = GMQwen2ForCausalLM.from_pretrained(
-                model_name_or_path,
-                trust_remote_code=True,
-                device_map="auto",
-                torch_dtype=torch.bfloat16,
-                quantization_config=quantization_config) # low_cpu_mem_usage=True
+                        model_name_or_path,
+                        trust_remote_code=True,
+                        device_map="auto",
+                        torch_dtype=torch.bfloat16,
+                        quantization_config=quantization_config) # low_cpu_mem_usage=True
         elif load_in_8bit:
             raise NotImplementedError
         else:
@@ -60,9 +69,7 @@ def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8
         # model = PeftModel.from_pretrained(model, model_name_or_path, is_trainable=True)
         return model
     
-    # We assume `peft` is available...
-    from transformers.utils import find_adapter_config_file
-    maybe_adapter_path = find_adapter_config_file(model_name_or_path)
+    
     if maybe_adapter_path is not None:
         peft_config = PeftConfig.from_pretrained(model_name_or_path)
         model_base = load_base_model(peft_config.base_model_name_or_path, load_in_4bit, load_in_8bit, vocab_size)
