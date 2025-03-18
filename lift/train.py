@@ -265,7 +265,7 @@ def distilltrain(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: 
 
 
 
-def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: PreTrainedTokenizer, training_args: TrainingArguments, kv_epoches: int=0, gather_batches: bool=True):
+def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer: PreTrainedTokenizer, training_args: TrainingArguments, kv_epoches: int=0, gather_batches: bool=True, distilldatapath: str=None):
     """Fine-tune the model and the corresponding tokenizer.
     Args:
         model (PreTrainedModel): the model to fine-tune.
@@ -277,7 +277,8 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
     Returns:
         model_tokenizer_pair (tuple[PreTrainedModel, PreTrainedTokenizer]): the fine-tuned model and the corresponding tokenizer.
     """
-
+    if kv_epoches == 0:
+        return model, optimizer
     def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         """
         This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
@@ -317,64 +318,73 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
         return attn_output
     
     model.eval()
-    torch.cuda.empty_cache()  # Manually release memory
     basemodel = model.model.model
-    scaling = basemodel.layers[0].self_attn.scaling
-    num_key_value_groups = basemodel.layers[0].self_attn.num_key_value_groups
-    
-    q2vattn = {idx: [[], []] for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx)}
-    q2vpaattn = {idx: [[], [], [], []] for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx)}
+    def builddistilldata():
+        scaling = basemodel.layers[0].self_attn.scaling
+        num_key_value_groups = basemodel.layers[0].self_attn.num_key_value_groups
+        
+        q2vattn = {idx: [[], []] for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx)}
+        q2vpaattn = {idx: [[], [], [], []] for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx)}
 
-    torch.cuda.empty_cache()
-    with torch.no_grad():
-        basetext = dataset[0]["basetext"].unsqueeze(0).to(model.device)
-        len_context = dataset[0]["len_context"]
-        basecache: DistillCache = model.forward(input_ids=basetext, gate_mask=torch.zeros_like(basetext), past_key_values=DistillCache(), use_cache=True).past_key_values
-        basecache.cpu()
         torch.cuda.empty_cache()
-        for data in tqdm(dataset, desc="get data"):
+        with torch.no_grad():
+            basetext = dataset[0]["basetext"].unsqueeze(0).to(model.device)
+            len_context = dataset[0]["len_context"]
+            basecache: DistillCache = model.forward(input_ids=basetext, gate_mask=torch.zeros_like(basetext), past_key_values=DistillCache(), use_cache=True).past_key_values
+            basecache.cpu()
             torch.cuda.empty_cache()
-            input_id = data["input_ids"].unsqueeze(0).to(model.device)
-            kvcache: DistillCache = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=deepcopy(basecache), use_cache=True).past_key_values
-            kvcache.cpu()
-            torch.cuda.empty_cache()
-
-            for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):#kvcache.query_cache:
-                def execcache():
-                    q, k, v, attnout = kvcache.query_cache[idx], kvcache.key_cache[idx], kvcache.value_cache[idx], kvcache.attnout_cache[idx]
-                    q_upper = q[:, :, len_context:]
-                    k_lower = k[:, :, :len_context]
-                    v_lower = v[:, :, :len_context]
-                    k_upper = k[:, :, len_context:]
-                    v_upper = v[:, :, len_context:]
-                    attnout_upper = attnout.transpose(1, 2)[:, :, len_context:]
-                    if len(q2vattn[idx][0]) > 0:
-                        q = q_upper
-                    
-                    vattnout = sdpa_attention_forward(num_key_value_groups, q.to(model.device), k_lower.to(model.device), v_lower.to(model.device), 0.0, scaling, False).cpu()
-                    if len(q2vattn[idx][0]) > 0:
-                        vattnout_upper = vattnout
-                    else:
-                        vattnout_upper = vattnout[:, :, len_context:]
-                    q2vattn[idx][0].append(q)
-                    q2vattn[idx][1].append(vattnout)
-                    
-                    q2vpaattn[idx][0].append(q_upper)
-                    q2vpaattn[idx][1].append(vattnout_upper)
-                    q2vpaattn[idx][2].append(sdpa_attention_forward(num_key_value_groups, q_upper.to(model.device), k_upper.to(model.device), v_upper.to(model.device), 0.0, scaling, True).cpu())
-                    q2vpaattn[idx][3].append(attnout_upper)
-                execcache()
+            for data in tqdm(dataset, desc="get data"):
                 torch.cuda.empty_cache()
-            del kvcache
-        del basecache
-    for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
-        q2vattn[idx][0] = torch.concat(q2vattn[idx][0], dim=2)#.transpose(0, 2)
-        q2vattn[idx][1] = torch.concat(q2vattn[idx][1], dim=2)#.transpose(0, 2)
+                input_id = data["input_ids"].unsqueeze(0).to(model.device)
+                kvcache: DistillCache = model.forward(input_ids=input_id, gate_mask=torch.zeros_like(input_id), past_key_values=deepcopy(basecache), use_cache=True).past_key_values
+                kvcache.cpu()
+                torch.cuda.empty_cache()
 
-        q2vpaattn[idx][0] = torch.concat(q2vpaattn[idx][0], dim=2)#.transpose(0, 2)
-        q2vpaattn[idx][1] = torch.concat(q2vpaattn[idx][1], dim=2)#.transpose(0, 2)
-        q2vpaattn[idx][2] = torch.concat(q2vpaattn[idx][2], dim=2)#.transpose(0, 2)
-        q2vpaattn[idx][3] = torch.concat(q2vpaattn[idx][3], dim=2)#.transpose(0, 2)
+                for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):#kvcache.query_cache:
+                    def execcache():
+                        q, k, v, attnout = kvcache.query_cache[idx], kvcache.key_cache[idx], kvcache.value_cache[idx], kvcache.attnout_cache[idx]
+                        q_upper = q[:, :, len_context:]
+                        k_lower = k[:, :, :len_context]
+                        v_lower = v[:, :, :len_context]
+                        k_upper = k[:, :, len_context:]
+                        v_upper = v[:, :, len_context:]
+                        attnout_upper = attnout.transpose(1, 2)[:, :, len_context:]
+                        if len(q2vattn[idx][0]) > 0:
+                            q = q_upper
+                        
+                        vattnout = sdpa_attention_forward(num_key_value_groups, q.to(model.device), k_lower.to(model.device), v_lower.to(model.device), 0.0, scaling, False).cpu()
+                        if len(q2vattn[idx][0]) > 0:
+                            vattnout_upper = vattnout
+                        else:
+                            vattnout_upper = vattnout[:, :, len_context:]
+                        q2vattn[idx][0].append(q)
+                        q2vattn[idx][1].append(vattnout)
+                        
+                        q2vpaattn[idx][0].append(q_upper)
+                        q2vpaattn[idx][1].append(vattnout_upper)
+                        q2vpaattn[idx][2].append(sdpa_attention_forward(num_key_value_groups, q_upper.to(model.device), k_upper.to(model.device), v_upper.to(model.device), 0.0, scaling, True).cpu())
+                        q2vpaattn[idx][3].append(attnout_upper)
+                    execcache()
+                    torch.cuda.empty_cache()
+                del kvcache
+            del basecache
+        for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
+            q2vattn[idx][0] = torch.concat(q2vattn[idx][0], dim=2)#.transpose(0, 2)
+            q2vattn[idx][1] = torch.concat(q2vattn[idx][1], dim=2)#.transpose(0, 2)
+
+            q2vpaattn[idx][0] = torch.concat(q2vpaattn[idx][0], dim=2)#.transpose(0, 2)
+            q2vpaattn[idx][1] = torch.concat(q2vpaattn[idx][1], dim=2)#.transpose(0, 2)
+            q2vpaattn[idx][2] = torch.concat(q2vpaattn[idx][2], dim=2)#.transpose(0, 2)
+            q2vpaattn[idx][3] = torch.concat(q2vpaattn[idx][3], dim=2)#.transpose(0, 2)
+        return q2vattn, q2vpaattn
+
+    import os.path as osp
+    if distilldatapath is not None and osp.exists(distilldatapath):
+        q2vattn, q2vpaattn = torch.load(distilldatapath, map_location="cpu")
+    else:
+        q2vattn, q2vpaattn = builddistilldata()
+        if distilldatapath is not None:
+            torch.save((q2vattn, q2vpaattn), distilldatapath)
 
 
     BATCHSIZE = 16384

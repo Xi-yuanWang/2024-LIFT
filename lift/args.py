@@ -58,6 +58,7 @@ class CustomTrainingArguments:
     gather_batches: bool = field(default=False)
     involve_qa_epochs: int = field(default=0)
     kv_epochs: int = field(default=10)
+    distilldatapath: str = field(default=None)
     
     def __post_init__(self):
         assert not self.load_in_8bit, "8-bit loading is not supported yet."

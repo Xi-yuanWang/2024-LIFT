@@ -14,13 +14,13 @@ prepare
 #python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_distill2.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.GLU.distill.full.noYaRN.normedGLU.g2m6.nores.distill2.kv1000.jsonl \
-    --output_dir models/qwendistill.GLU.distill2 \
+    --output_file outputs/subset.distill2.test.jsonl \
+    --output_dir models/qwendistill.GLU.distill2.test \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \
     --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
-    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0GLUg2m6-Qwen2.5-32B-Instruct \
+    --model_name_or_path models/qwendistill.GLU.distill2 \
     --model_max_length 32000 \
     --block_size 256 \
     --len_segment 32 \
@@ -34,7 +34,7 @@ python scripts/test_loogle_lift_distill2.py \
     --gather_batches False \
     --involve_qa_epochs 0 \
     --num_train_epochs 100 \
-    --kv_epochs 1000 \
+    --kv_epochs 0 \
     --distilldatapath distilldata/subset.32.8.pt \
     --remove_unused_columns True \
     --report_to none \

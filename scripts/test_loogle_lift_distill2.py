@@ -341,27 +341,30 @@ class LooGLEDataset(ICLContextDataset):
         return len(self.data) #if self.enable_qa_tag else self.num_segments
     
     
-def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_gated_memory: bool=False, use_cot: bool=False, use_icl: bool=True, kv_epochs: int=0, **kwargs):
+def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_name_or_path: str, training_args: TrainingArguments, model_max_length: int=4096, block_size: int=256, len_segment: int=8, len_offset: int=3, use_lora: bool=False, lora_rank: Optional[int]=None, use_pissa: bool=False, load_in_4bit: bool=False, involve_qa_epochs: int=0, gather_batches: bool=True, num_syn_qa: int=0, title_option: int=1, generator_name_or_path: Optional[str]=None, use_gated_memory: bool=False, use_cot: bool=False, use_icl: bool=True, kv_epochs: int=0, distilldatapath: str=None, **kwargs):
     model = load_model(model_name_or_path=model_name_or_path, use_lora=use_lora, lora_rank=lora_rank, use_pissa=use_pissa, load_in_4bit=load_in_4bit, vocab_size=len(tokenizer), use_gated_memory=use_gated_memory)
     
-    from peft import get_peft_model, LoraConfig, TaskType
-    lora_config1 = LoraConfig(
-            r=1,
-            target_modules=["layers.63.self_attn.q_proj"],
-            task_type=TaskType.CAUSAL_LM,
-            lora_alpha=0.0,
-            modules_to_save=[f"layers.{i}.self_attn.mem_proj" for i in range(len(model.model.layers))] + [f"layers.{i}.self_attn.gate_proj" for i in range(len(model.model.layers))],
-        )
-    model = get_peft_model(model, lora_config1)
-    print("kv train numel", sum([_.numel() for _ in model.parameters() if _.requires_grad]))
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            print(name, param.shape, param.numel())
-    model.save_pretrained(training_args.output_dir, "before_distill")
-    dataset = DistillDataset(title, context, tokenizer, model_max_length, block_size, len_segment, len_offset)
-    len_context = dataset[0]["len_context"]
-    model = distilltrain2(model, dataset, tokenizer, training_args, kv_epochs, gather_batches)[0]
-    model.save_pretrained(training_args.output_dir, "after_distill")
+    if kv_epochs == 0:
+        pass
+    else:
+        from peft import get_peft_model, LoraConfig, TaskType
+        lora_config1 = LoraConfig(
+                r=1,
+                target_modules=["layers.63.self_attn.q_proj"],
+                task_type=TaskType.CAUSAL_LM,
+                lora_alpha=0.0,
+                modules_to_save=[f"layers.{i}.self_attn.mem_proj" for i in range(len(model.model.layers))] + [f"layers.{i}.self_attn.gate_proj" for i in range(len(model.model.layers))],
+            )
+        model = get_peft_model(model, lora_config1)
+        print("kv train numel", sum([_.numel() for _ in model.parameters() if _.requires_grad]))
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                print(name, param.shape, param.numel())
+        model.save_pretrained(training_args.output_dir, "before_distill")
+        dataset = DistillDataset(title, context, tokenizer, model_max_length, block_size, len_segment, len_offset)
+        len_context = dataset[0]["len_context"]
+        model = distilltrain2(model, dataset, tokenizer, training_args, kv_epochs, gather_batches, distilldatapath)[0]
+        model.save_pretrained(training_args.output_dir, "after_distill")
     #dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
     #model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
     return model, len_context
