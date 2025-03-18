@@ -380,11 +380,21 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
 
     import os.path as osp
     if distilldatapath is not None and osp.exists(distilldatapath):
-        q2vattn, q2vpaattn = torch.load(distilldatapath, map_location="cpu")
+        from safetensors import safe_open
+        q2vattn = {}
+        with safe_open(osp.join(distilldatapath, "q2vattn.safetensors"), framework="pt", device="cpu") as f:
+            for k in f.keys():
+                q2vattn[k] = f.get_tensor(k)
+        q2vpaattn = {}
+        with safe_open(osp.join(distilldatapath, "q2vpaattn.safetensors"), framework="pt", device="cpu") as f:
+            for k in f.keys():
+                q2vpaattn[k] = f.get_tensor(k)
     else:
         q2vattn, q2vpaattn = builddistilldata()
         if distilldatapath is not None:
-            torch.save((q2vattn, q2vpaattn), distilldatapath)
+            from safetensors.torch import save_file
+            save_file(q2vattn, osp.join(distilldatapath, "q2vattn.safetensors"))
+            save_file(q2vpaattn, osp.join(distilldatapath, "q2vpaattn.safetensors"))
 
 
     BATCHSIZE = 16384
