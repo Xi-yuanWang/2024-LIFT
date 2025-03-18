@@ -88,14 +88,14 @@ class MemGLU(nn.Module):
         self.res = res
 
     def forward(self, x):
-        '''
+        
         # GLU
         for i in range(self.num_layer):
             normedx = self.norm(x)
             if self.res:
-                x = x + self.proj1[i](normedx) * self.proj2[i](normedx)
+                x = x + F.silu(self.proj1[i](normedx), inplace=True) * self.proj2[i](normedx)
             else:
-                x = self.proj1[i](normedx) * self.proj2[i](normedx)
+                x = F.silu(self.proj1[i](normedx), inplace=True) * self.proj2[i](normedx)
         '''
         # PowerMLP
         for i in range(self.num_layer):
@@ -104,6 +104,7 @@ class MemGLU(nn.Module):
                 x = x + self.proj1[i](F.silu(normedx)) + torch.relu(self.proj2[i](normedx))**3
             else:
                 x = self.proj1[i](F.silu(normedx)) + torch.relu(self.proj2[i](normedx))**3
+        '''
         return x
 
 
