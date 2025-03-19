@@ -75,6 +75,22 @@ class ResSequential(nn.Module):
             x = x + mod(x)
         return x
 
+class GLU(nn.Module):
+    def __init__(self, res: bool, *linargs, **linkwargs) -> None:
+        super().__init__()
+        self.proj1 = GroupedLinear(*linargs, **linkwargs)
+        self.proj2 = GroupedLinear(*linargs, **linkwargs)
+        self.res = res
+
+    def forward(self, x):
+        
+
+        if self.res:
+            x = x + F.silu(self.proj1(x), inplace=True) * self.proj2(x)
+        else:
+            x = F.silu(self.proj1(x), inplace=True) * self.proj2(x)
+        return x
+
 class MemGLU(nn.Module):
     def __init__(self, num_layer: int, res: bool, *linargs, **linkwargs) -> None:
         super().__init__()
@@ -142,8 +158,8 @@ class GMQwen2Attention(Qwen2Attention):
         super().__init__(config, layer_idx)
         assert self.is_causal, "implemented only for casual LLM"
         self.num_key_value_heads = self.config.num_key_value_heads
-        glu = MemGLU(6, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
-        self.mem_proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
+        #glu = MemGLU(6, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
+        self.mem_proj = nn.Sequential(GLU(False, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 2*self.head_dim, bias=True), GLU(True, self.num_key_value_groups, self.num_key_value_heads, 2*self.head_dim, 2*self.head_dim, bias=True), GLU(False, self.num_key_value_groups, self.num_key_value_heads, 2*self.head_dim, self.head_dim, bias=True))#nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
         self.gate_proj = GLUGate(2, True, self.scaling, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
 
     def forward(
