@@ -41,8 +41,9 @@ def load_base_model(model_name_or_path: str, load_in_4bit: bool=False, load_in_8
         if maybe_adapter_path:
             peft_config = PeftConfig.from_pretrained(model_name_or_path)
             model_base = load_base_model(peft_config.base_model_name_or_path, load_in_4bit, load_in_8bit, vocab_size, use_gated_memory)
+            model_base.enable_input_require_grads()
             model = PeftModel.from_pretrained(model_base, model_name_or_path, config=peft_config, is_trainable=True)
-            model = model.merge_and_unload()
+            # model = model.merge_and_unload()
             return model
 
         if load_in_4bit:

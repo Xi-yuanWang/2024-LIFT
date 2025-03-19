@@ -223,6 +223,7 @@ class GMQwen2Attention(Qwen2Attention):
             memgate2 = (memgate * gate_mask.to(memgate.dtype).unsqueeze(-2).unsqueeze(-1)).transpose(1, 2)
             mem2 = mem.transpose(1, 2)
             attn_output = (1-memgate2) * attn_output + memgate2 * mem2
+            # print("evoke", mem2.requires_grad, flush=True)
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights, memgate
@@ -811,7 +812,7 @@ class GMQwen2ForCausalLM(GMQwen2PreTrainedModel, GenerationMixin):
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
         logits = self.lm_head(hidden_states[:, slice_indices, :])
-
+        # print(logits.requires_grad)
         loss = None
         if labels is not None:
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)

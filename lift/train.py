@@ -414,12 +414,15 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
         #dataloader = torch.utils.data.DataLoader(dataset, batch_size=32768, shuffle=True)#, pin_memory=True)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, kv_epoches//5)
         
+        #outmean = VATTN.mean(dim=2, keepdim=True)
+        #outstd = VATTN.std(dim=2, keepdim=True)
+        
         for _ in tqdm(range(kv_epoches), desc=f"mem {idx}"):
             perms = torch.split(torch.randperm(LEN, device=model.device), BATCHSIZE)
             for perm in perms:
                 q: torch.Tensor = Q[:, :, perm]#.transpose(0, 2)
                 vattn: torch.Tensor = VATTN[:, :, perm]#.transpose(0, 2)
-                memout: torch.Tensor = memproj(q)
+                memout: torch.Tensor = memproj(q)# * outstd + outmean
                 l1loss: torch.Tensor = (memout - vattn).norm(dim=-1).flatten()
                 cosloss: torch.Tensor = 1 - torch.nn.CosineSimilarity(dim=-1)(memout, vattn).flatten()
                 l1loss = postloss(l1loss, 1e-2)
@@ -460,7 +463,7 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
             print(f"gate {idx} epoch {_} {l1loss.item():.3f} {cosloss.item():.3f}", flush=True)
         del Q, VATTN, PATTN, ATTN
         torch.cuda.empty_cache()
-    return model, optimizer
+    return model, None
 
 
 def train(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrainedTokenizer, training_args: TrainingArguments, involve_qa_epochs: int=0, gather_batches: bool=True):
@@ -480,6 +483,7 @@ def train(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrained
     # Load and finetune the model
     if involve_qa_epochs > 0:
         dataset.disable_qa()
+    model.train()
     trainer, model = load_trainer(
         model=model,
         training_dataset=dataset,

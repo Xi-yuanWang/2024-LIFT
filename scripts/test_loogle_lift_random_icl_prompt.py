@@ -114,7 +114,7 @@ class ICLContextDataset(Dataset):
         return {
             'input_ids': input_ids,
             'labels': labels,
-            'attention_mask': attention_mask,
+            'gate_mask': attention_mask,
         }
     
     def __getitem__(self, index):
@@ -276,6 +276,10 @@ def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_
     model = load_model(model_name_or_path=model_name_or_path, use_lora=use_lora, lora_rank=lora_rank, use_pissa=use_pissa, load_in_4bit=load_in_4bit, vocab_size=len(tokenizer), use_gated_memory=use_gated_memory)
     if use_lora or use_gated_memory:
         dataset = LooGLEDataset(context, title, tokenizer, model_max_length, block_size, len_segment, len_offset, num_syn_qa, title_option, generator_name_or_path, use_cot, use_icl=use_icl)
+        print("kv train numel", sum([_.numel() for _ in model.parameters() if _.requires_grad]))
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                print(name, param.shape, param.numel())
         model = train(model, dataset, tokenizer, training_args, involve_qa_epochs, gather_batches)[0]
     return model
 
@@ -314,11 +318,11 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
                 raise NotImplementedError
                 input_ids = input_ids[:model_max_length//2 - len(mixin)] + mixin + input_ids[-model_max_length//2:]
             input_ids = torch.tensor(input_ids, dtype=torch.long, device=model.device).unsqueeze(0)
-            attention_mask = torch.ones_like(input_ids)
+            gate_mask = torch.ones_like(input_ids)
             #terminators = [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")]
             output = model.generate(
                 input_ids=input_ids,
-                attention_mask=attention_mask,
+                gate_mask=gate_mask,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
                 max_new_tokens=1024,
