@@ -158,8 +158,9 @@ class GMQwen2Attention(Qwen2Attention):
         super().__init__(config, layer_idx)
         assert self.is_causal, "implemented only for casual LLM"
         self.num_key_value_heads = self.config.num_key_value_heads
-        #glu = MemGLU(6, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
-        self.mem_proj = nn.Sequential(GLU(False, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 2*self.head_dim, bias=True), GLU(True, self.num_key_value_groups, self.num_key_value_heads, 2*self.head_dim, 2*self.head_dim, bias=True), GLU(False, self.num_key_value_groups, self.num_key_value_heads, 2*self.head_dim, self.head_dim, bias=True))#nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
+        glu = MemGLU(6, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
+        #self.mem_proj = nn.Sequential(GLU(False, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 2*self.head_dim, bias=True), GLU(True, self.num_key_value_groups, self.num_key_value_heads, 2*self.head_dim, 2*self.head_dim, bias=True), GLU(False, self.num_key_value_groups, self.num_key_value_heads, 2*self.head_dim, self.head_dim, bias=True))
+        self.mem_proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
         self.gate_proj = GLUGate(2, True, self.scaling, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
 
     def forward(

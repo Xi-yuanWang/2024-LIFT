@@ -12,21 +12,21 @@
 source utils.sh
 prepare
 #python lift/gated_memory/utils.py
-python scripts/test_loogle_lift_distill2.py \
+python scripts/test_loogle_lift_ICL.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.distill2.test2.jsonl \
+    --output_file outputs/subset.ICL.test.jsonl \
     --output_dir models/qwendistill.GLU.distill2.test \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \
     --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
     --model_name_or_path models/qwendistill.GLU.distill2 \
-    --tokenizer_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0GLUg2m6-Qwen2.5-32B-Instruct \
+    --tokenizer_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
     --model_max_length 32000 \
     --block_size 256 \
     --len_segment 32 \
     --len_offset 8 \
-    --use_gated_memory True \
+    --use_gated_memory False \
     --load_in_4bit True \
     --use_icl False \
     --use_lora False \
