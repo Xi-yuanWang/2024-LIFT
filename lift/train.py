@@ -344,21 +344,26 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
                     def execcache():
                         q, k, v, attnout = kvcache.query_cache[idx], kvcache.key_cache[idx], kvcache.value_cache[idx], kvcache.attnout_cache[idx]
                         q_upper = q[:, :, len_context:]
-                        k_lower = k[:, :, :len_context]
-                        v_lower = v[:, :, :len_context]
+                        k_lower = basecache.key_cache[idx]
+                        v_lower = basecache.value_cache[idx]
                         k_upper = k[:, :, len_context:]
                         v_upper = v[:, :, len_context:]
                         attnout_upper = attnout.transpose(1, 2)[:, :, len_context:]
                         if len(q2vattn[idx][0]) > 0:
                             q = q_upper
-                        
-                        vattnout = sdpa_attention_forward(num_key_value_groups, q.to(model.device), k_lower.to(model.device), v_lower.to(model.device), 0.0, scaling, False).cpu()
-                        if len(q2vattn[idx][0]) > 0:
+                            vattnout = sdpa_attention_forward(num_key_value_groups, q.to(model.device), k_lower.to(model.device), v_lower.to(model.device), 0.0, scaling, False).cpu()
                             vattnout_upper = vattnout
                         else:
+                            vattnout = sdpa_attention_forward(num_key_value_groups, q.to(model.device), k_lower.to(model.device), v_lower.to(model.device), 0.0, scaling, False).cpu()
                             vattnout_upper = vattnout[:, :, len_context:]
                         q2vattn[idx][0].append(q)
                         q2vattn[idx][1].append(vattnout)
+
+                        if True:
+                            q_f = q + torch.randn_like(q)
+                            vattnout_f = sdpa_attention_forward(num_key_value_groups, q_f.to(model.device), k_lower.to(model.device), v_lower.to(model.device), 0.0, scaling, False).cpu()
+                            q2vattn[idx][0].append(q_f)
+                            q2vattn[idx][1].append(vattnout_f)
                         
                         q2vpaattn[idx][0].append(q_upper)
                         q2vpaattn[idx][1].append(vattnout_upper)
@@ -376,6 +381,8 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
             q2vpaattn[idx][1] = torch.concat(q2vpaattn[idx][1], dim=2)#.transpose(0, 2)
             q2vpaattn[idx][2] = torch.concat(q2vpaattn[idx][2], dim=2)#.transpose(0, 2)
             q2vpaattn[idx][3] = torch.concat(q2vpaattn[idx][3], dim=2)#.transpose(0, 2)
+            print(f"idx {idx} q2vattn", q2vattn[idx][0].shape, q2vattn[idx][1].shape)
+            print(f"idx {idx} q2vpaattn", q2vpaattn[idx][0].shape, q2vpaattn[idx][1].shape, q2vpaattn[idx][2].shape, q2vpaattn[idx][3].shape)
         return q2vattn, q2vpaattn
 
     import os.path as osp

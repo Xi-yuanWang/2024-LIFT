@@ -124,6 +124,33 @@ class MemGLU(nn.Module):
         return x
 
 
+class CosMemGLU(nn.Module):
+    def __init__(self, num_layer: int, res: bool, *linargs, **linkwargs) -> None:
+        super().__init__()
+        self.num_layer = num_layer
+        # For GLU
+        #self.proj1 = nn.ModuleList([nn.Sequential(GroupedLinear(*linargs, **linkwargs), nn.Identity(), nn.SiLU(inplace=True)) for _ in range(num_layer)]) 
+        # For PowerMLP
+        self.proj1 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
+        self.proj2 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
+        self.proj3 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
+        self.proj4 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
+        self.norm = MyLayerNorm()
+        self.res = res
+
+    def forward(self, x):
+        
+        for i in range(self.num_layer):
+            normedx = self.norm(x) 
+            cosx = torch.cos(self.proj3[i](x))
+            expx = torch.softmax(self.proj4[i](x), dim=-1)
+            if self.res:
+                x = x + (F.silu(self.proj1[i](normedx), inplace=True) + cosx) * (self.proj2[i](normedx) + expx)
+            else:
+                x = (F.silu(self.proj1[i](normedx), inplace=True) + cosx) * (self.proj2[i](normedx) + expx)
+        return x
+
+
 class GLUGate(nn.Module):
     def __init__(self, num_layer: int, res: bool, scaling: float, num_key_value_groups: int, num_key_value_heads: int, *linargs, **linkwargs):
         super().__init__()
@@ -158,7 +185,8 @@ class GMQwen2Attention(Qwen2Attention):
         super().__init__(config, layer_idx)
         assert self.is_causal, "implemented only for casual LLM"
         self.num_key_value_heads = self.config.num_key_value_heads
-        glu = MemGLU(6, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
+        glu = CosMemGLU(4, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
+        #glu = MemGLU(6, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
         #self.mem_proj = nn.Sequential(GLU(False, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 2*self.head_dim, bias=True), GLU(True, self.num_key_value_groups, self.num_key_value_heads, 2*self.head_dim, 2*self.head_dim, bias=True), GLU(False, self.num_key_value_groups, self.num_key_value_heads, 2*self.head_dim, self.head_dim, bias=True))
         self.mem_proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
         self.gate_proj = GLUGate(2, True, self.scaling, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)

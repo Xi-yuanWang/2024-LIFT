@@ -79,7 +79,7 @@ class DistillDataset(Dataset):
         len_context = len(context)
         assert len_context < 110 * 1000, "max rope is 128k"
         self.data = []
-        for _ in range(1):
+        for _ in range(0):
             self.data.append({
                 "basetext": context,
                 'input_ids': torch.randint(0, tokenizer.vocab_size - 1, (len_segment,)),
