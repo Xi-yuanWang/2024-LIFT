@@ -30,6 +30,17 @@ import tqdm
 from torch.utils.data import Dataset
 from copy import deepcopy
 import os.path as osp
+import nltk
+from nltk.corpus import wordnet as wn
+import random
+from nltk.tokenize import word_tokenize
+from nltk import pos_tag
+
+# Download necessary NLTK data files (if not already downloaded)
+# nltk.download('punkt')
+# nltk.download('punkt_tab')
+# nltk.download('averaged_perceptron_tagger')
+# nltk.download('averaged_perceptron_tagger_eng')
 
 LIFT_ICL_PROMPT = "Given the article \"{title}\": "
 LOOGLEFORMAT_NON_ICL = "<|im_start|>user\n Based on the article \"{title}\", please answer the following question concisely and accurately: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
@@ -49,6 +60,81 @@ def randomreplace(intensor, tokenizer: PreTrainedTokenizer, dp: float=0.05):
     mask = torch.rand_like(intensor, dtype=torch.float) < dp
     intensor[mask] = torch.randint_like(intensor[mask], 0, tokenizer.vocab_size - 1)
     return intensor
+
+
+# Define function to generate a random sentence
+class RandomSentenceGenerator:
+    def __init__(self, text: str) -> None:
+        tokens = word_tokenize(text)
+        tagged_tokens = pos_tag(tokens)
+
+        def uniq_list(inlist):
+            return inlist #to show frequency, list(set(inlist))
+        self.inner_adj_list = uniq_list([word for word, tag in tagged_tokens if tag in ['JJ', 'JJR', 'JJS']])
+        self.inner_noun_list = uniq_list([word for word, tag in tagged_tokens if tag.startswith('NN')])
+        self.inner_verb_list = uniq_list([word for word, tag in tagged_tokens if tag.startswith('VB')])
+        self.inner_det_list = uniq_list([word for word, tag in tagged_tokens if tag == 'DT'])
+        self.inner_prep_list = uniq_list([word for word, tag in tagged_tokens if tag == 'IN'])
+        self.inner_adv_list = uniq_list([word for word, tag in tagged_tokens if tag.startswith("RB")])
+
+        self.adj_list = list(wn.all_synsets(wn.ADJ))
+        self.noun_list = list(wn.all_synsets(wn.NOUN))
+        self.verb_list = list(wn.all_synsets(wn.VERB))
+        self.adv_list = list(wn.all_synsets(wn.ADV))
+        self.det_list = ["a", "the", "every", "some"]
+        self.prep_list = ["in", "on", "with", "over", "under"]
+        self.sentence_structure = [
+            "The {adj} {noun1} {verb} the {noun2}.",
+            "A {noun1} {verb} {adv} {noun2}.",
+            "{noun1} {verb} {det} {adj} {noun2}.",
+            "Every {noun1} {verb} {prep} a {noun2}.",
+            "What is {adj} {noun1}? {noun2} {verb} {det} {adj} {noun3}.",
+            "When is {adj} {noun1}? {noun2} {verb} {det} {adj} {noun3}.",
+            "Who is {adj} {noun1}? {noun2} {verb} {det} {adj} {noun3}.",
+            "Which is {adj} in {noun1} {noun2} {noun3}? {noun2} {verb} {det} {adj} {noun3}.",
+            "Where does {noun1} {verb} {noun2}? {noun3} {verb} {det} {adj} {noun2}.",
+            "How does {noun1} {verb} {noun2}? {noun3} {verb} {det} {adj} {noun2}.",
+            "Did {noun1} {verb} {prep} a {noun2}? Yes/No.",
+        ]
+
+    def generate_random_sentence(self, num_sent=1):
+        # Choose a random sentence structure
+        sentences = []
+        for _ in range(num_sent):
+            structure = random.choice(self.sentence_structure)
+            
+            # Word categories
+            adj = random.choice(self.adj_list)
+            noun1 = random.choice(self.noun_list)
+            noun2 = random.choice(self.noun_list)
+            noun3 = random.choice(self.noun_list)
+            verb = random.choice(self.verb_list)
+            adv = random.choice(self.adv_list)
+            det = random.choice(self.det_list)
+            prep = random.choice(self.prep_list)
+            
+            # Get random words from the categories
+            adj_word = random.choice([random.choice(adj.lemmas()).name(), random.choice(self.inner_adj_list)])
+            noun_word1 = random.choice([random.choice(noun1.lemmas()).name(), random.choice(self.inner_noun_list)])
+            noun_word2 = random.choice([random.choice(noun2.lemmas()).name(), random.choice(self.inner_noun_list)])
+            noun_word3 = random.choice([random.choice(noun3.lemmas()).name(), random.choice(self.inner_noun_list)])
+            verb_word = random.choice([random.choice(verb.lemmas()).name(), random.choice(self.inner_verb_list)])
+            adv_word = random.choice([random.choice(adv.lemmas()).name(), random.choice(self.inner_adv_list)])
+            
+            # Fill the structure with words
+            sentence = structure.format(
+                adj=adj_word,
+                noun1=noun_word1,
+                noun2=noun_word2,
+                noun3=noun_word3,
+                verb=verb_word,
+                adv=adv_word,
+                det=det,
+                prep=prep
+            )
+            
+            sentences.append(sentence)
+        return sentences
 
 class DistillDataset(Dataset):
     """Given a piece of context, `ContextDataset` creates a torch-Dataset, using the truncation strategy described in our paper.
@@ -75,7 +161,7 @@ class DistillDataset(Dataset):
         prompt = self.tokenizer(prompt, add_special_tokens=False)['input_ids']
 
         context = torch.tensor(prompt + input_ids, dtype=torch.long)
-        
+        sent_gen = RandomSentenceGenerator(texts)
         len_context = len(context)
         assert len_context < 110 * 1000, "max rope is 128k"
         self.data = []
@@ -93,6 +179,20 @@ class DistillDataset(Dataset):
                             +input_ids[i:min(i+len_segment, len_context)], dtype=torch.long)), tokenizer), tokenizer),
                 'len_context': len_context
             })
+        for i in range(0, 20):
+            sents = sent_gen.generate_random_sentence(len_segment//30)
+            text = f"<|im_start|>user\n Based on the article \"{title}\", could you please identify the following sentences or QAs. Are they factual information, false information, or information unrelated to the article? <|im_end|>\n<|im_start|>assistant\n Sure!<|im_end|>\n"
+            for sent in sents:
+                ans = random.choice(["Fact", "False", "Unrelated"])
+                text += f"<|im_start|>user\n " + sent + f"<|im_end|>\n<|im_start|>assistant\n {ans} <|im_end|>\n"
+            self.data.append({
+                "basetext": context,
+                'input_ids': removeendtoken(randomreplace(randomdropout(torch.tensor(
+                            self.tokenizer(text, add_special_tokens=False)["input_ids"]
+                            +input_ids[i:min(i+len_segment, len_context)], dtype=torch.long)), tokenizer), tokenizer),
+                'len_context': len_context
+            })
+        '''
         for i in range(0, len_context-len_offset, len_offset):
             self.data.append({
                 'basetext': context,
@@ -104,6 +204,7 @@ class DistillDataset(Dataset):
                             + self.tokenizer(f".<|im_end|><|endoftext|><|endoftext|>", add_special_tokens=False)["input_ids"], dtype=torch.long)), tokenizer),
                 'len_context': len_context
             })
+        '''
 
 
     def __len__(self):

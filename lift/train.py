@@ -359,7 +359,7 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
                         q2vattn[idx][0].append(q)
                         q2vattn[idx][1].append(vattnout)
 
-                        if True:
+                        if False:
                             q_f = q + torch.randn_like(q)
                             vattnout_f = sdpa_attention_forward(num_key_value_groups, q_f.to(model.device), k_lower.to(model.device), v_lower.to(model.device), 0.0, scaling, False).cpu()
                             q2vattn[idx][0].append(q_f)
@@ -381,8 +381,8 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
             q2vpaattn[idx][1] = torch.concat(q2vpaattn[idx][1], dim=2)#.transpose(0, 2)
             q2vpaattn[idx][2] = torch.concat(q2vpaattn[idx][2], dim=2)#.transpose(0, 2)
             q2vpaattn[idx][3] = torch.concat(q2vpaattn[idx][3], dim=2)#.transpose(0, 2)
-            print(f"idx {idx} q2vattn", q2vattn[idx][0].shape, q2vattn[idx][1].shape)
-            print(f"idx {idx} q2vpaattn", q2vpaattn[idx][0].shape, q2vpaattn[idx][1].shape, q2vpaattn[idx][2].shape, q2vpaattn[idx][3].shape)
+            #print(f"idx {idx} q2vattn", q2vattn[idx][0].shape, q2vattn[idx][1].shape)
+            #print(f"idx {idx} q2vpaattn", q2vpaattn[idx][0].shape, q2vpaattn[idx][1].shape, q2vpaattn[idx][2].shape, q2vpaattn[idx][3].shape)
         return q2vattn, q2vpaattn
 
     import os.path as osp
@@ -404,7 +404,7 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
             save_file(q2vpaattn, osp.join(distilldatapath, "q2vpaattn.safetensors"))
 
 
-    BATCHSIZE = 16384
+    BATCHSIZE = 32768
     
     def postloss(lossmat, clipval: float=1e-3):
         lossmat = lossmat.flatten()

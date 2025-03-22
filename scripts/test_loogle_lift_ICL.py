@@ -30,6 +30,17 @@ import tqdm
 from torch.utils.data import Dataset
 from copy import deepcopy
 import os.path as osp
+import nltk
+from nltk.corpus import wordnet as wn
+import random
+from nltk.tokenize import word_tokenize
+from nltk import pos_tag
+
+# Download necessary NLTK data files (if not already downloaded)
+# nltk.download('punkt')
+# nltk.download('punkt_tab')
+# nltk.download('averaged_perceptron_tagger')
+# nltk.download('averaged_perceptron_tagger_eng')
 
 LIFT_ICL_PROMPT = "Given the article \"{title}\": "
 LOOGLEFORMAT_NON_ICL = "<|im_start|>user\n Based on the article \"{title}\", please answer the following question concisely and accurately: \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\nAnswer: "
@@ -93,6 +104,7 @@ class DistillDataset(Dataset):
                             +input_ids[i:min(i+len_segment, len_context)], dtype=torch.long)), tokenizer), tokenizer),
                 'len_context': len_context
             })
+        '''
         for i in range(0, len_context-len_offset, len_offset):
             self.data.append({
                 'basetext': context,
@@ -104,6 +116,7 @@ class DistillDataset(Dataset):
                             + self.tokenizer(f".<|im_end|><|endoftext|><|endoftext|>", add_special_tokens=False)["input_ids"], dtype=torch.long)), tokenizer),
                 'len_context': len_context
             })
+        '''
 
 
     def __len__(self):
