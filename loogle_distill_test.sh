@@ -14,7 +14,7 @@ prepare
 #python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_distill2.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.distill2.test2.jsonl \
+    --output_file outputs/subset.distill2.noCOT.test2.jsonl \
     --output_dir models/qwendistill.GLU.distill2.test \
     --overwrite False \
     --num_syn_qa 0 \
@@ -31,7 +31,7 @@ python scripts/test_loogle_lift_distill2.py \
     --use_icl False \
     --use_lora False \
     --lora_rank 32 \
-    --use_cot True \
+    --use_cot False \
     --gather_batches False \
     --involve_qa_epochs 0 \
     --num_train_epochs 100 \

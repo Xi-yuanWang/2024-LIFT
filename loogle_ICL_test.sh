@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH -p IAI_SLURM_HGX
-#SBATCH --nodelist hgx001
 #SBATCH -o logs/%j-loogle-shortqa.out
 #SBATCH -e logs/%j-loogle-shortqa.err
 #SBATCH -c 8
@@ -14,14 +13,14 @@ prepare
 #python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_ICL.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.ICL.test.jsonl \
-    --output_dir models/qwendistill.GLU.distill2.test \
+    --output_file outputs/subset.ICL.test.1.5B.jsonl \
+    --output_dir models/qwendistill.GLU.1.5B.test \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \
     --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
-    --model_name_or_path models/qwendistill.GLU.distill2 \
-    --tokenizer_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
+    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-1.5B-Instruct \
+    --tokenizer_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-1.5B-Instruct \
     --model_max_length 32000 \
     --block_size 256 \
     --len_segment 32 \

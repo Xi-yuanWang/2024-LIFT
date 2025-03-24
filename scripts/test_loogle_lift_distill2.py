@@ -179,8 +179,8 @@ class DistillDataset(Dataset):
                             +input_ids[i:min(i+len_segment, len_context)], dtype=torch.long)), tokenizer), tokenizer),
                 'len_context': len_context
             })
-        for i in range(0, 20):
-            sents = sent_gen.generate_random_sentence(len_segment//30)
+        for i in range(0, 10):
+            sents = sent_gen.generate_random_sentence(len_segment//40)
             text = f"<|im_start|>user\n Based on the article \"{title}\", could you please identify the following sentences or QAs. Are they factual information, false information, or information unrelated to the article? <|im_end|>\n<|im_start|>assistant\n Sure!<|im_end|>\n"
             for sent in sents:
                 ans = random.choice(["Fact", "False", "Unrelated"])
@@ -453,7 +453,7 @@ def LooGLEtrain(context: str, title: str, tokenizer: PreTrainedTokenizer, model_
         from peft import get_peft_model, LoraConfig, TaskType
         lora_config1 = LoraConfig(
                 r=1,
-                target_modules=["layers.63.self_attn.q_proj"],
+                target_modules=[f"layers.{i}.self_attn.q_proj" for i in [len(model.model.layers)-1]],
                 task_type=TaskType.CAUSAL_LM,
                 lora_alpha=0.0,
                 modules_to_save=[f"layers.{i}.self_attn.mem_proj" for i in range(len(model.model.layers))] + [f"layers.{i}.self_attn.gate_proj" for i in range(len(model.model.layers))],

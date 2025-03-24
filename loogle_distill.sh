@@ -1,26 +1,26 @@
 #!/bin/bash
 #SBATCH -p IAI_SLURM_HGX
-#SBATCH --nodelist hgx001
+#SBATCH --nodelist=hgx006
 #SBATCH -o logs/%j-loogle-shortqa.out
 #SBATCH -e logs/%j-loogle-shortqa.err
-#SBATCH -c 8
+#SBATCH -c 16
 #SBATCH --gres=gpu:1
 #SBATCH --qos=16gpu-hgx
 #SBATCH -J main_short 
 #SBATCH --nodes=1 
-#SBATCH --time=24:00:00
+#SBATCH --time=72:00:00
 source utils.sh
 prepare
-python lift/gated_memory/utils.py
+#python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_distill2.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.multiGLU.distill2.jsonl \
-    --output_dir models/qwendistill.multiGLU.distill2 \
+    --output_file outputs/subset.changeGLU4.distill2.jsonl \
+    --output_dir models/qwendistill.changeGLU4.distill2 \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \
     --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
-    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0GLUChange-Qwen2.5-32B-Instruct \
+    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0GLUChange-Qwen2.5-1.5B-Instruct \
     --model_max_length 32000 \
     --block_size 256 \
     --len_segment 32 \

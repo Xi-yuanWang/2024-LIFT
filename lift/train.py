@@ -405,7 +405,9 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
 
 
     BATCHSIZE = 32768
-    
+    device = model.device
+    #model = model.cpu() 
+    torch.cuda.empty_cache()
     def postloss(lossmat, clipval: float=1e-3):
         lossmat = lossmat.flatten()
         #ret = torch.sum(lossmat.clamp_min_(clipval) * torch.softmax(lossmat.detach()/0.1, dim=0))
@@ -413,50 +415,52 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
         return ret
 
     for idx in range(basemodel.config.num_hidden_layers-basemodel.layer_end_idx-1, basemodel.layer_start_idx-1, -1):#range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
-        memproj = basemodel.layers[idx].self_attn.mem_proj
+        memproj = basemodel.layers[idx].self_attn.mem_proj#.to(device)
         optimizer = torch.optim.AdamW(memproj.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
-        Q, VATTN = q2vattn[idx][0].to(model.device), q2vattn[idx][1].to(model.device)
+        Q, VATTN = q2vattn[idx][0].to(device), q2vattn[idx][1].to(device)
         LEN = Q.shape[2]
         #dataset = torch.utils.data.TensorDataset(q2vattn[idx][0].to(model.device), q2vattn[idx][1].to(model.device))
         #dataloader = torch.utils.data.DataLoader(dataset, batch_size=32768, shuffle=True)#, pin_memory=True)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, kv_epoches//5)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, kv_epoches//4)
         
         #outmean = VATTN.mean(dim=2, keepdim=True)
         #outstd = VATTN.std(dim=2, keepdim=True)
         
         for _ in tqdm(range(kv_epoches), desc=f"mem {idx}"):
-            perms = torch.split(torch.randperm(LEN, device=model.device), BATCHSIZE)
-            for perm in perms:
-                q: torch.Tensor = Q[:, :, perm]#.transpose(0, 2)
-                vattn: torch.Tensor = VATTN[:, :, perm]#.transpose(0, 2)
+            #perms = torch.split(torch.randperm(LEN, device=model.device), BATCHSIZE)
+            if True:#for perm in perms:
+                q: torch.Tensor = Q#[:, :, perm]#.transpose(0, 2)
+                vattn: torch.Tensor = VATTN#[:, :, perm]#.transpose(0, 2)
                 memout: torch.Tensor = memproj(q)# * outstd + outmean
                 l1loss: torch.Tensor = (memout - vattn).norm(dim=-1).flatten()
                 cosloss: torch.Tensor = 1 - torch.nn.CosineSimilarity(dim=-1)(memout, vattn).flatten()
                 l1loss = postloss(l1loss, 1e-2)
                 cosloss = postloss(cosloss, 1e-3) 
                 (l1loss + cosloss).backward()
-                scheduler.step()
                 optimizer.step()
                 optimizer.zero_grad()
-            print(f"mem {idx} epoch {_} {l1loss.item():.3f} {cosloss.item():.3f}", flush=True)
+                scheduler.step()
+            if _ % 10 == 0:
+                print(f"mem {idx} epoch {_} {l1loss.item():.3f} {cosloss.item():.3f}", flush=True)
         del Q, VATTN
+        #memproj = memproj.cpu()
         torch.cuda.empty_cache()
 
     for idx in range(basemodel.config.num_hidden_layers-basemodel.layer_end_idx-1, basemodel.layer_start_idx-1, -1):#range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
-        gateproj = basemodel.layers[idx].self_attn.gate_proj
+        gateproj = basemodel.layers[idx].self_attn.gate_proj#.to(device)
         optimizer = torch.optim.AdamW(gateproj.parameters(), lr=training_args.learning_rate, weight_decay=training_args.weight_decay)
-        Q, VATTN, PATTN, ATTN = q2vpaattn[idx][0].to(model.device), q2vpaattn[idx][1].to(model.device), q2vpaattn[idx][2].to(model.device), q2vpaattn[idx][3].to(model.device)
+        Q, VATTN, PATTN, ATTN = q2vpaattn[idx][0].to(device), q2vpaattn[idx][1].to(device), q2vpaattn[idx][2].to(device), q2vpaattn[idx][3].to(device)
         LEN = Q.shape[2]
         #dataset = torch.utils.data.TensorDataset(q2vpaattn[idx][0].to(model.device), q2vpaattn[idx][1].to(model.device), q2vpaattn[idx][2].to(model.device), q2vpaattn[idx][3].to(model.device))
         #dataloader = torch.utils.data.DataLoader(dataset, batch_size=32768, shuffle=True)#, pin_memory=True)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, kv_epoches//5)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, kv_epoches//4)
         for _ in tqdm(range(kv_epoches), desc=f"gate {idx}"):
-            perms = torch.split(torch.randperm(LEN, device=model.device), 16384)
-            for perm in perms:
-                q: torch.Tensor = Q[:, :, perm]
-                vattn: torch.Tensor = VATTN[:, :, perm]
-                pattn: torch.Tensor = PATTN[:, :, perm]
-                attn: torch.Tensor = ATTN[:, :, perm]
+            #perms = torch.split(torch.randperm(LEN, device=model.device), 16384)
+            if True:#for perm in perms:
+                q: torch.Tensor = Q#[:, :, perm]
+                vattn: torch.Tensor = VATTN#[:, :, perm]
+                pattn: torch.Tensor = PATTN#[:, :, perm]
+                attn: torch.Tensor = ATTN#[:, :, perm]
                 gateout: torch.Tensor = gateproj(q, None)
                 predout = pattn + gateout * (vattn-pattn)
                 l1loss: torch.Tensor = (predout - attn).norm(dim=-1).flatten()
@@ -464,11 +468,13 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
                 l1loss = postloss(l1loss, 1e-2)
                 cosloss = postloss(cosloss, 1e-3)
                 (l1loss + cosloss).backward()
-                scheduler.step()
                 optimizer.step()
                 optimizer.zero_grad()
-            print(f"gate {idx} epoch {_} {l1loss.item():.3f} {cosloss.item():.3f}", flush=True)
+                scheduler.step()
+            if _ %10 == 0:    
+                print(f"gate {idx} epoch {_} {l1loss.item():.3f} {cosloss.item():.3f}", flush=True)
         del Q, VATTN, PATTN, ATTN
+        # gateproj = gateproj.cpu()
         torch.cuda.empty_cache()
     return model, None
 

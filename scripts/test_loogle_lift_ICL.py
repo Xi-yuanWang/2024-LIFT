@@ -392,7 +392,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
     for i, sample in enumerate(tqdm.tqdm(data, desc="Sample")):
         if i < num_resumed:
             continue
-        context = sample['input']
+        text_context = sample['input']
         title = sample['title']
         # qa_pairs = sample['test_qa_pairs']
         qa_pairs = eval(sample['qa_pairs'])
@@ -403,7 +403,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
         #tmp = deepcopy(qa_pairs[-1])
         #tmp["Q"] = "Who is Xiyuan Wang?"
         #qa_pairs.append(tmp)
-        model, len_context, context = LooGLEtrain(context, title, tokenizer, training_args=training_args, num_syn_qa=num_syn_qa, title_option=title_option, generator_name_or_path=generator_name_or_path, use_cot=use_cot, use_icl=use_icl, **lift_args)
+        model, len_context, context = LooGLEtrain(text_context, title, tokenizer, training_args=training_args, num_syn_qa=num_syn_qa, title_option=title_option, generator_name_or_path=generator_name_or_path, use_cot=use_cot, use_icl=use_icl, **lift_args)
         model.eval()
         for qa_pair in tqdm.tqdm(qa_pairs, desc="QA Pair"):
             
@@ -422,7 +422,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             gate_mask = torch.ones_like(input_ids)
             output = model.generate(
                 input_ids=input_ids,
-                gate_mask=gate_mask,
+                # gate_mask=gate_mask,
                 # cache_position=(torch.arange(input_ids.shape[1])+len_context).to(model.device),
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
@@ -448,7 +448,7 @@ def prediction(data: List[Dict], training_args: TrainingArguments, lift_args: Di
             '''
         output_case = {
             'title': title,
-            'input': context,
+            'input': text_context,
             'qa_pairs': qa_pairs
         }
         #print(output_case, flush=True)
