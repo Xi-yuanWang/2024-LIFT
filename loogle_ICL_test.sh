@@ -13,14 +13,14 @@ prepare
 #python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_ICL.py \
     --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.ICL.test.1.5B.jsonl \
-    --output_dir models/qwendistill.GLU.1.5B.test \
+    --output_file outputs/subset.ICL.test.7B.jsonl \
+    --output_dir models/qwendistill.GLU.7B.test \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \
     --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
-    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-1.5B-Instruct \
-    --tokenizer_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-1.5B-Instruct \
+    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-7B-Instruct-YaRN \
+    --tokenizer_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-7B-Instruct-YaRN \
     --model_max_length 32000 \
     --block_size 256 \
     --len_segment 32 \

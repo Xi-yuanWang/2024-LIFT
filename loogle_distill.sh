@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH -p IAI_SLURM_HGX
-#SBATCH --nodelist=hgx006
 #SBATCH -o logs/%j-loogle-shortqa.out
 #SBATCH -e logs/%j-loogle-shortqa.err
 #SBATCH -c 16
@@ -11,20 +10,20 @@
 #SBATCH --time=72:00:00
 source utils.sh
 prepare
-#python lift/gated_memory/utils.py
+python lift/gated_memory/utils.py
 python scripts/test_loogle_lift_distill2.py \
-    --input_file shortdep_qa.subset.jsonl \
-    --output_file outputs/subset.changeGLU4.distill2.jsonl \
-    --output_dir models/qwendistill.changeGLU4.distill2 \
+    --input_file shortdep_qa.jsonl \
+    --output_file outputs/subset.7B.distill2_6.jsonl \
+    --output_dir models/qwendistill.7B.distill2_6 \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \
     --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
-    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0GLUChange-Qwen2.5-1.5B-Instruct \
+    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/GM6Qwen2.5-7B-Instruct-YaRN \
     --model_max_length 32000 \
     --block_size 256 \
-    --len_segment 32 \
-    --len_offset 8 \
+    --len_segment 17 \
+    --len_offset 16 \
     --use_gated_memory True \
     --load_in_4bit True \
     --use_icl False \

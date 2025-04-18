@@ -160,8 +160,10 @@ class GLUGate(nn.Module):
         self.scaling = scaling
         self.head_dim = linargs[0]
         glu = MemGLU(num_layer, res, num_key_value_groups, num_key_value_heads, *linargs, **linkwargs)
-        self.proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 1, bias=False))
+        #self.proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 1, bias=False))
         
+        middim = int(self.head_dim**0.5)
+        self.proj = nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, middim, bias=False), nn.SiLU(inplace=True), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, middim, 1, bias=False)) 
     
     def forward(self, queries: torch.Tensor, keys: torch.Tensor):
         '''
@@ -186,10 +188,19 @@ class GMQwen2Attention(Qwen2Attention):
         assert self.is_causal, "implemented only for casual LLM"
         self.num_key_value_heads = self.config.num_key_value_heads
         #glu = CosMemGLU(4, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
-        glu = MemGLU(2 + int(13 * (layer_idx/63)), True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
-        #glu = MemGLU(6, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
+        #glu = MemGLU(2 + int(13 * (layer_idx/63)), True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
+        glu = MemGLU(6, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
         #self.mem_proj = nn.Sequential(GLU(False, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 2*self.head_dim, bias=True), GLU(True, self.num_key_value_groups, self.num_key_value_heads, 2*self.head_dim, 2*self.head_dim, bias=True), GLU(False, self.num_key_value_groups, self.num_key_value_heads, 2*self.head_dim, self.head_dim, bias=True))
-        self.mem_proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
+        #self.mem_proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
+        '''    
+        memdim = 2 * self.head_dim
+        self.mem_proj = nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=False),
+            ResSequential([nn.Sequential(nn.SiLU(inplace=True), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, memdim, bias=False))]),
+            nn.Softmax(dim=-1),
+            ResSequential([nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, memdim, bias=False), nn.SiLU(inplace=True))]),
+            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=False)
+            )
+        '''
         self.gate_proj = GLUGate(2, True, self.scaling, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
 
     def forward(

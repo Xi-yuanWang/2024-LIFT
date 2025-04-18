@@ -319,6 +319,7 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
     
     model.eval()
     basemodel = model.model.model
+    scaling = basemodel.layers[0].self_attn.scaling
     def builddistilldata():
         scaling = basemodel.layers[0].self_attn.scaling
         num_key_value_groups = basemodel.layers[0].self_attn.num_key_value_groups
@@ -372,17 +373,35 @@ def distilltrain2(model: GMQwen2ForCausalLM, dataset: ContextDataset, tokenizer:
                     execcache()
                     torch.cuda.empty_cache()
                 del kvcache
-            del basecache
+            #del basecache
         for idx in range(basemodel.layer_start_idx, basemodel.config.num_hidden_layers-basemodel.layer_end_idx):
             q2vattn[idx][0] = torch.concat(q2vattn[idx][0], dim=2)#.transpose(0, 2)
             q2vattn[idx][1] = torch.concat(q2vattn[idx][1], dim=2)#.transpose(0, 2)
-
+            
+            randintidx = torch.randint(0, q2vattn[idx][0].shape[2], (1024,))
+            qs, ats = q2vattn[idx][0][:, :, randintidx], q2vattn[idx][1][:, :, randintidx]
+            #qs, ats = q2vattn[idx][0][:, :, :8192], q2vattn[idx][1][:, :, :8192]
+            fullk, fullv = basecache.key_cache[idx], basecache.value_cache[idx]
+            torch.save((qs, ats, fullk, fullv), "toy.pt")
+            #qs, ats, fullk, fullv = qs.to(model.device), ats.to(model.device), fullk.to(model.device), fullv.to(model.device)
+            #print(qs.shape, ats.shape, fullk.shape, fullv.shape)
+            #import torch.nn.functional as F
+            #attnmat = F.softmax(scaling*qs.unflatten(1, (4, 7))@fullk.unflatten(1, (4, 1)).transpose(-2, -1), dim=-1).flatten(2, 3)
+            #U, S, V = torch.svd(attnmat.to(torch.float))
+            #print(S[:100]) 
+            #torch.save(S.cpu(), "S.pt")
+            #print(torch.norm(ats - (F.softmax(scaling*qs.unflatten(1, (4, 7))@fullk.unflatten(1, (4, 1)).transpose(-2, -1), dim=-1)@fullv.unflatten(1, (4, 1))).flatten(1, 2), dim=-1))
+            #print(torch.norm(ats - sdpa_attention_forward(num_key_value_groups, qs, fullk, fullv, 0.0, scaling, False), dim=-1))
+            #print(torch.norm(ats - F.softmax(scaling*qs@repeat_kv(fullk, num_key_value_groups).transpose(-2, -1), dim=-1)@repeat_kv(fullv, num_key_value_groups), dim=-1))
+            
+            exit()
             q2vpaattn[idx][0] = torch.concat(q2vpaattn[idx][0], dim=2)#.transpose(0, 2)
             q2vpaattn[idx][1] = torch.concat(q2vpaattn[idx][1], dim=2)#.transpose(0, 2)
             q2vpaattn[idx][2] = torch.concat(q2vpaattn[idx][2], dim=2)#.transpose(0, 2)
             q2vpaattn[idx][3] = torch.concat(q2vpaattn[idx][3], dim=2)#.transpose(0, 2)
             #print(f"idx {idx} q2vattn", q2vattn[idx][0].shape, q2vattn[idx][1].shape)
             #print(f"idx {idx} q2vpaattn", q2vpaattn[idx][0].shape, q2vpaattn[idx][1].shape, q2vpaattn[idx][2].shape, q2vpaattn[idx][3].shape)
+        del basecache
         return q2vattn, q2vpaattn
 
     import os.path as osp
