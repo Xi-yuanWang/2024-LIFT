@@ -1,8 +1,116 @@
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Union, List
+from transformers.models.llama.modeling_llama import LlamaConfig, logger, apply_rotary_pos_emb, Cache, repeat_kv, LlamaAttention, FlashAttentionKwargs, StaticCache, LlamaDecoderLayer, LlamaPreTrainedModel, BaseModelOutputWithPast, DynamicCache, LlamaModel, GenerationMixin, KwargsForCausalLM, CausalLMOutputWithPast
 import math
-from transformers.models.llama.modeling_llama import LlamaConfig, logger, apply_rotary_pos_emb, Cache, repeat_kv, LlamaAttention, FlashAttentionKwargs, StaticCache, LlamaDecoderLayer, LlamaPreTrainedModel, BaseModelOutputWithPast, DynamicCache, LlamaModel, GenerationMixin, KwargsForCausalLM, CausalLMOutputWithPast, LlamaRMSNorm
+import torch.nn.functional as F
+
+class DistillCache(DynamicCache):
+    
+    def __init__(self, usegm: bool=False, num_hidden_layers: Optional[int] = None) -> None:
+        super().__init__()
+        self.query_cache = {}
+        self.attnout_cache = {}
+        self.virtual_attnout_cache = {}
+        self.post_attnout_cache = {}
+
+    def updateq(self, idx, q):
+        if idx not in self.query_cache:
+            self.query_cache[idx] = q.cpu()
+        else:
+            self.query_cache[idx] = torch.concat((self.query_cache[idx], q.cpu()), dim=2)
+
+    def updateattnout(self, idx, o):
+        if idx not in self.attnout_cache:
+            self.attnout_cache[idx] = o.cpu()
+        else:
+            self.attnout_cache[idx] = torch.concat((self.attnout_cache[idx], o.cpu()), dim=2)
+
+    def cpu(self):
+        for i in range(len(self.key_cache)):
+            self.key_cache[i] = self.key_cache[i].cpu()
+        for i in range(len(self.value_cache)):
+            self.value_cache[i] = self.value_cache[i].cpu()
+        for key in self.query_cache:
+            self.query_cache[key] = self.query_cache[key].cpu()
+        for key in self.attnout_cache:
+            self.attnout_cache[key] = self.attnout_cache[key].cpu()
+        for key in self.virtual_attnout_cache:
+            self.virtual_attnout_cache[key] = self.virtual_attnout_cache[key].cpu()
+        for key in self.post_attnout_cache:
+            self.post_attnout_cache[key] = self.post_attnout_cache[key].cpu()
+
+    def to(self, device):
+        for i in range(len(self.key_cache)):
+            self.key_cache[i] = self.key_cache[i].to(device)
+        for i in range(len(self.value_cache)):
+            self.value_cache[i] = self.value_cache[i].to(device)
+        for key in self.query_cache:
+            self.query_cache[key] = self.query_cache[key].to(device)
+        for key in self.attnout_cache:
+            self.attnout_cache[key] = self.attnout_cache[key].to(device)
+        for key in self.virtual_attnout_cache:
+            self.virtual_attnout_cache[key] = self.virtual_attnout_cache[key].to(device)
+        for key in self.post_attnout_cache:
+            self.post_attnout_cache[key] = self.post_attnout_cache[key].to(device)
+    
+    def query_to(self, dev):
+        for key in self.query_cache:
+            self.query_cache[key] = self.query_cache[key].to(dev)
+    def kv_to(self, dev):
+        for i in range(len(self.key_cache)):
+            self.key_cache[i] = self.key_cache[i].to(dev, non_blocking=True)
+        for i in range(len(self.value_cache)):
+            self.value_cache[i] = self.value_cache[i].to(dev, non_blocking=True)
+
+class GroupedLinear(nn.Module):
+    def __init__(self, group_size: int, indim: int, outdim: int, bias: bool=True) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.empty((group_size, indim, outdim)))
+        if bias:
+            self.bias = nn.Parameter(torch.empty((group_size, outdim)))
+        else:
+            self.register_parameter('bias', None)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
+        # uniform(-1/sqrt(in_features), 1/sqrt(in_features)). For details, see
+        # https://github.com/pytorch/pytorch/issues/57109
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            nn.init.uniform_(self.bias, -bound, bound)
+        
+    def forward(self, x: torch.Tensor):
+        '''
+        x: (bsz, #group_size*#repeat, q_len, #in_dim)
+        '''
+        x = x.unflatten(1, (self.group_size, -1))#self.num_repeat))
+        if self.bias is None:
+            x = x @ self.weight.unsqueeze(1)
+        else:
+            x = x @ self.weight.unsqueeze(1) + self.bias.unsqueeze(1).unsqueeze(1)
+        x = x.flatten(1, 2)
+        return x
+
+class BiasSigmoid(nn.Module):
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.mod = nn.Sigmoid()
+
+    def forward(self, x):
+        return self.mod(3*(x - 1))
+    
+class BiasScale(nn.Module):
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, x):
+        return x#0.2 * x
 
 
 class MyRMSNorm(nn.Module):
@@ -36,59 +144,84 @@ class MyLayerNorm(nn.Module):
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
         return hidden_states.to(input_dtype)
 
-
-class GroupedLinear(nn.Module):
-    def __init__(self, num_repeat: int, group_size: int, indim: int, outdim: int, bias: bool=True, tailnorm: bool=False) -> None:
+class GLU(nn.Module):
+    def __init__(self, num_layer: int, res: bool, *linargs, **linkwargs) -> None:
         super().__init__()
-        self.weight = nn.Parameter(torch.empty((group_size, indim, outdim)))
-        if bias:
-            self.bias = nn.Parameter(torch.empty((group_size, outdim)))
-        else:
-            self.register_parameter('bias', None)
-        self.reset_parameters()
-        self.num_repeat = num_repeat
-        self.group_size = group_size
-        assert not tailnorm
-        self.norm = MyLayerNorm() if tailnorm else nn.Identity() 
+        self.num_layer = num_layer
+        self.proj1 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
+        self.proj2 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
+        self.norm = MyLayerNorm()
+        self.res = res
 
-    def reset_parameters(self) -> None:
-        # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
-        # uniform(-1/sqrt(in_features), 1/sqrt(in_features)). For details, see
-        # https://github.com/pytorch/pytorch/issues/57109
-        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        if self.bias is not None:
-            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
-            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-            nn.init.uniform_(self.bias, -bound, bound)
+    def forward(self, x):
+        # GLU
+        for i in range(self.num_layer):
+            normedx = self.norm(x)
+            if self.res:
+                x = x + F.silu(self.proj1[i](normedx), inplace=True) * self.proj2[i](normedx)
+            else:
+                x = F.silu(self.proj1[i](normedx), inplace=True) * self.proj2[i](normedx)
+        return x
+
+class PowerMLP(GLU):
+    def __init__(self, num_layer: int, res: bool, *linargs, **linkwargs) -> None:
+        super().__init__(num_layer, res, *linargs, **linkwargs)
+
+    def forward(self, x):
+        # PowerMLP
+        for i in range(self.num_layer):
+            normedx = self.norm(x)
+            if self.res:
+                x = x + self.proj1[i](F.silu(normedx)) + torch.relu(self.proj2[i](normedx))**3
+            else:
+                x = self.proj1[i](F.silu(normedx)) + torch.relu(self.proj2[i](normedx))**3
+        return x
+
+
+class CosMemGLU(GLU):
+    def __init__(self, num_layer: int, res: bool, *linargs, **linkwargs) -> None:
+        super().__init__(num_layer, res, *linargs, **linkwargs)
+        self.proj3 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
+        self.proj4 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
         
-    def forward(self, x: torch.Tensor):
-        '''
-        x: (bsz, #group_size*#repeat, q_len, #in_dim)
-        '''
-        x = x.unflatten(1, (self.group_size, -1))#self.num_repeat))
-        if self.bias is None:
-            x = x @ self.weight.unsqueeze(1)
-        else:
-            x = x @ self.weight.unsqueeze(1) + self.bias.unsqueeze(1).unsqueeze(1)
-        x = x.flatten(1, 2)
-        return self.norm(x)
-
-class BiasSigmoid(nn.Module):
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.mod = nn.Sigmoid()
-
     def forward(self, x):
-        return self.mod(3*(x - 1))
+        for i in range(self.num_layer):
+            normedx = self.norm(x) 
+            cosx = torch.cos(self.proj3[i](x))
+            expx = torch.softmax(self.proj4[i](x), dim=-1)
+            if self.res:
+                x = x + (F.silu(self.proj1[i](normedx), inplace=True) + cosx) * (self.proj2[i](normedx) + expx)
+            else:
+                x = (F.silu(self.proj1[i](normedx), inplace=True) + cosx) * (self.proj2[i](normedx) + expx)
+        return x
+
+
+class GLUGate(nn.Module):
+    def __init__(self, num_layer: int, res: bool, scaling: float, num_key_value_groups: int, num_key_value_heads: int, *linargs, **linkwargs):
+        super().__init__()
+        self.scaling = scaling
+        self.num_key_value_groups = num_key_value_groups
+        self.num_key_value_heads = num_key_value_heads
+        self.scaling = scaling
+        self.head_dim = linargs[0]
+        middim = int(self.head_dim**0.5)
+        self.proj = nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, middim, bias=False), nn.SiLU(inplace=True), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, middim, 1, bias=False)) 
     
-class BiasScale(nn.Module):
+    def forward(self, queries: torch.Tensor, keys: torch.Tensor=None):
+        '''
+        k = keys.unflatten(1, (self.num_key_value_heads, 1))
+        q = queries.unflatten(1, (self.num_key_value_heads, self.num_key_value_groups))
+        attn_weights = ((q @ k.transpose(-1, -2)) * self.scaling).flatten(1, 2)
+        #print(k.shape, q.shape)
+        if queries.shape[-2] > 1:
+            causal_mask = torch.tril(torch.ones(*attn_weights.shape[-2:], dtype=torch.bool, device=attn_weights.device))[None, None, :, :]
+            causal_mask = causal_mask.expand(*attn_weights.shape)
+            attn_weights = attn_weights.masked_fill(~causal_mask, -torch.inf)
+        post_sum = torch.logsumexp(attn_weights, dim=-1, keepdim=True)
+        '''
+        memgate = self.proj(queries)
+        return nn.functional.sigmoid(memgate-2) # -post_sum
 
-    def __init__(self) -> None:
-        super().__init__()
-
-    def forward(self, x):
-        return x#0.2 * x
 
 class GMLlamaAttention(LlamaAttention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -97,23 +230,8 @@ class GMLlamaAttention(LlamaAttention):
         super().__init__(config, layer_idx)
         # assert config.num_attention_heads == config.num_key_value_heads, "not implemented for tensor parallel"
         assert self.is_causal, "implemented only for casual LLM"
-        memdim = 2 * self.head_dim
-        self.mem_proj = nn.Sequential(
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=config.attention_bias),
-            nn.SiLU(inplace=True),
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=config.attention_bias),
-            MyRMSNorm()
-            )
-        gatedim = int(self.head_dim**0.5)
-        tmp = GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, gatedim, 1, bias=False)
-        with torch.no_grad():
-            tmp.weight.fill_(0.0)
-        self.gate_proj = nn.Sequential(
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, gatedim, bias=False),
-            nn.SiLU(inplace=True),
-            tmp,
-            BiasScale()#nn.Sigmoid()
-            )
+        self.mem_proj = GLU(3, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
+        self.gate_proj = GLUGate(2, True, self.scaling, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
 
     def forward(
         self,
@@ -136,8 +254,9 @@ class GMLlamaAttention(LlamaAttention):
         # use -1 to infer num_heads and num_key_value_heads as they may vary if tensor parallel is used
         query_states = query_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2) 
-        #mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
+        value_states = value_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
+
+
         if position_embeddings is None:
             logger.warning_once(
                 "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
@@ -149,12 +268,19 @@ class GMLlamaAttention(LlamaAttention):
         else:
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        if isinstance(past_key_value, DistillCache):
+            past_key_value.updateq(self.layer_idx, query_states)
+            memgate = None
+            if past_key_value.usegm:
+                mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
+        else:
+            mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
@@ -170,7 +296,12 @@ class GMLlamaAttention(LlamaAttention):
         attn_output = torch.matmul(attn_weights, value_states)
 
         # !!! merge result with mem and gate
-        attn_output = attn_output + memgate * mem
+        if isinstance(past_key_value, DistillCache):
+            past_key_value.updateattnout(self.layer_idx, attn_output)
+            if past_key_value.usegm:
+                attn_output = (1-memgate) * attn_output + memgate * mem
+        else:
+            attn_output = (1-memgate) * attn_output + memgate * mem
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
@@ -187,7 +318,7 @@ class GMLlamaAttention(LlamaAttention):
         if not output_attentions:
             attn_weights = None
 
-        return attn_output, attn_weights, past_key_value, memgate
+        return attn_output, attn_weights
 
 
 class GMLlamaFlashAttention2(GMLlamaAttention):
@@ -314,7 +445,7 @@ class GMLlamaFlashAttention2(GMLlamaAttention):
         if not output_attentions:
             attn_weights = None
 
-        return attn_output, attn_weights, past_key_value, memgate
+        return attn_output, attn_weights
 
 
 class GMLlamaSdpaAttention(GMLlamaAttention):
@@ -365,7 +496,6 @@ class GMLlamaSdpaAttention(GMLlamaAttention):
         query_states = query_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
-        #mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
 
         if position_embeddings is None:
             logger.warning_once(
@@ -378,12 +508,19 @@ class GMLlamaSdpaAttention(GMLlamaAttention):
         else:
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-        mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states) 
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        if isinstance(past_key_value, DistillCache):
+            past_key_value.updateq(self.layer_idx, query_states)
+            memgate = None
+            if past_key_value.usegm:
+                mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
+        else:
+            mem, memgate = self.mem_proj(query_states), self.gate_proj(query_states)
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
@@ -412,15 +549,19 @@ class GMLlamaSdpaAttention(GMLlamaAttention):
             is_causal=is_causal,
         )
 
-        # !!! merge result with mem and gate
-        attn_output = attn_output + memgate * mem
+        if isinstance(past_key_value, DistillCache):
+            past_key_value.updateattnout(self.layer_idx, attn_output)
+            if past_key_value.usegm:
+                attn_output = (1-memgate) * attn_output + memgate * mem
+        else:
+            attn_output = (1-memgate) * attn_output + memgate * mem
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, -1)
 
         attn_output = self.o_proj(attn_output)
 
-        return attn_output, None, past_key_value, memgate
+        return attn_output, None
 
 
 GMLLAMA_ATTENTION_CLASSES = {
@@ -474,7 +615,7 @@ class GMLlamaDecoderLayer(LlamaDecoderLayer):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, self_attn_weights, present_key_value, memgate = self.self_attn(
+        hidden_states, self_attn_weights = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -494,14 +635,8 @@ class GMLlamaDecoderLayer(LlamaDecoderLayer):
         hidden_states = residual + hidden_states
 
         outputs = (hidden_states,)
-
         if output_attentions:
             outputs += (self_attn_weights,)
-
-        if use_cache:
-            outputs += (present_key_value,)
-
-        outputs += (memgate, )
 
         return outputs
 
@@ -592,7 +727,6 @@ class GMLlamaModel(LlamaModel):
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
         all_memgates = ()
-        next_decoder_cache = None
 
         for decoder_layer in self.layers[: self.config.num_hidden_layers]:
             if output_hidden_states:
@@ -625,9 +759,6 @@ class GMLlamaModel(LlamaModel):
 
             hidden_states = layer_outputs[0]
 
-            if use_cache:
-                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
-
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
             
@@ -639,15 +770,14 @@ class GMLlamaModel(LlamaModel):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
-        next_cache = next_decoder_cache if use_cache else None
         if return_legacy_cache:
-            next_cache = next_cache.to_legacy_cache()
+            past_key_values = past_key_values.to_legacy_cache()
 
         if not return_dict:
-            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None) + (all_memgates, )
+            return tuple(v for v in [hidden_states, past_key_values, all_hidden_states, all_self_attns] if v is not None) + (all_memgates, )
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
-            past_key_values=next_cache,
+            past_key_values=past_key_values,
             hidden_states=all_hidden_states,
             attentions=(all_self_attns, all_memgates),
         )

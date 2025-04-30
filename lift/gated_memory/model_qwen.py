@@ -9,176 +9,10 @@ from typing import Callable, List, Optional, Tuple, Union
 import torch
 from torch import nn
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Config, Cache, FlashAttentionKwargs, Unpack, Qwen2Attention, apply_rotary_pos_emb, eager_attention_forward, logger, ALL_ATTENTION_FUNCTIONS, Qwen2MLP, Qwen2RMSNorm, Qwen2DecoderLayer, PreTrainedModel, Qwen2RotaryEmbedding, BaseModelOutputWithPast, DynamicCache, StaticCache, SlidingWindowCache, AttentionMaskConverter, LossKwargs, GenerationMixin, CausalLMOutputWithPast
-from lift.gated_memory.model import GroupedLinear, MyRMSNorm, BiasScale, BiasSigmoid, MyLayerNorm
+from lift.gated_memory.model import GLU, GLUGate, DistillCache
 import torch.nn.functional as F
 
-class DistillCache(DynamicCache):
-    
-    def __init__(self, num_hidden_layers: Optional[int] = None) -> None:
-        super().__init__()
-        self.query_cache = {}
-        self.attnout_cache = {}
-        self.virtual_attnout_cache = {}
-        self.post_attnout_cache = {}
 
-    def updateq(self, idx, q):
-        if idx not in self.query_cache:
-            self.query_cache[idx] = q.cpu()
-        else:
-            self.query_cache[idx] = torch.concat((self.query_cache[idx], q.cpu()), dim=2)
-
-    def updateattnout(self, idx, o):
-        if idx not in self.attnout_cache:
-            self.attnout_cache[idx] = o.cpu()
-        else:
-            self.attnout_cache[idx] = torch.concat((self.attnout_cache[idx], o.cpu()), dim=1)
-
-    def cpu(self):
-        for i in range(len(self.key_cache)):
-            self.key_cache[i] = self.key_cache[i].cpu()
-        for i in range(len(self.value_cache)):
-            self.value_cache[i] = self.value_cache[i].cpu()
-        for key in self.query_cache:
-            self.query_cache[key] = self.query_cache[key].cpu()
-        for key in self.attnout_cache:
-            self.attnout_cache[key] = self.attnout_cache[key].cpu()
-        for key in self.virtual_attnout_cache:
-            self.virtual_attnout_cache[key] = self.virtual_attnout_cache[key].cpu()
-        for key in self.post_attnout_cache:
-            self.post_attnout_cache[key] = self.post_attnout_cache[key].cpu()
-
-    def to(self, device):
-        for i in range(len(self.key_cache)):
-            self.key_cache[i] = self.key_cache[i].to(device)
-        for i in range(len(self.value_cache)):
-            self.value_cache[i] = self.value_cache[i].to(device)
-        for key in self.query_cache:
-            self.query_cache[key] = self.query_cache[key].to(device)
-        for key in self.attnout_cache:
-            self.attnout_cache[key] = self.attnout_cache[key].to(device)
-        for key in self.virtual_attnout_cache:
-            self.virtual_attnout_cache[key] = self.virtual_attnout_cache[key].to(device)
-        for key in self.post_attnout_cache:
-            self.post_attnout_cache[key] = self.post_attnout_cache[key].to(device)
-    
-    def query_to(self, dev):
-        for key in self.query_cache:
-            self.query_cache[key] = self.query_cache[key].to(dev)
-
-class ResSequential(nn.Module):
-    def __init__(self, modulelist) -> None:
-        super().__init__()
-        self.mods = nn.ModuleList(modulelist)
-    
-    def forward(self, x):
-        for mod in self.mods:
-            x = x + mod(x)
-        return x
-
-class GLU(nn.Module):
-    def __init__(self, res: bool, *linargs, **linkwargs) -> None:
-        super().__init__()
-        self.proj1 = GroupedLinear(*linargs, **linkwargs)
-        self.proj2 = GroupedLinear(*linargs, **linkwargs)
-        self.res = res
-
-    def forward(self, x):
-        
-
-        if self.res:
-            x = x + F.silu(self.proj1(x), inplace=True) * self.proj2(x)
-        else:
-            x = F.silu(self.proj1(x), inplace=True) * self.proj2(x)
-        return x
-
-class MemGLU(nn.Module):
-    def __init__(self, num_layer: int, res: bool, *linargs, **linkwargs) -> None:
-        super().__init__()
-        self.num_layer = num_layer
-        # For GLU
-        #self.proj1 = nn.ModuleList([nn.Sequential(GroupedLinear(*linargs, **linkwargs), nn.Identity(), nn.SiLU(inplace=True)) for _ in range(num_layer)]) 
-        # For PowerMLP
-        self.proj1 = nn.ModuleList([nn.Sequential(GroupedLinear(*linargs, **linkwargs)) for _ in range(num_layer)])
-        self.proj2 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
-        self.norm = MyLayerNorm()
-        self.res = res
-
-    def forward(self, x):
-        
-        # GLU
-        for i in range(self.num_layer):
-            normedx = self.norm(x)
-            if self.res:
-                x = x + F.silu(self.proj1[i](normedx), inplace=True) * self.proj2[i](normedx)
-            else:
-                x = F.silu(self.proj1[i](normedx), inplace=True) * self.proj2[i](normedx)
-        '''
-        # PowerMLP
-        for i in range(self.num_layer):
-            normedx = self.norm(x)
-            if self.res:
-                x = x + self.proj1[i](F.silu(normedx)) + torch.relu(self.proj2[i](normedx))**3
-            else:
-                x = self.proj1[i](F.silu(normedx)) + torch.relu(self.proj2[i](normedx))**3
-        '''
-        return x
-
-
-class CosMemGLU(nn.Module):
-    def __init__(self, num_layer: int, res: bool, *linargs, **linkwargs) -> None:
-        super().__init__()
-        self.num_layer = num_layer
-        # For GLU
-        #self.proj1 = nn.ModuleList([nn.Sequential(GroupedLinear(*linargs, **linkwargs), nn.Identity(), nn.SiLU(inplace=True)) for _ in range(num_layer)]) 
-        # For PowerMLP
-        self.proj1 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
-        self.proj2 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
-        self.proj3 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
-        self.proj4 = nn.ModuleList([GroupedLinear(*linargs, **linkwargs) for _ in range(num_layer)])
-        self.norm = MyLayerNorm()
-        self.res = res
-
-    def forward(self, x):
-        
-        for i in range(self.num_layer):
-            normedx = self.norm(x) 
-            cosx = torch.cos(self.proj3[i](x))
-            expx = torch.softmax(self.proj4[i](x), dim=-1)
-            if self.res:
-                x = x + (F.silu(self.proj1[i](normedx), inplace=True) + cosx) * (self.proj2[i](normedx) + expx)
-            else:
-                x = (F.silu(self.proj1[i](normedx), inplace=True) + cosx) * (self.proj2[i](normedx) + expx)
-        return x
-
-
-class GLUGate(nn.Module):
-    def __init__(self, num_layer: int, res: bool, scaling: float, num_key_value_groups: int, num_key_value_heads: int, *linargs, **linkwargs):
-        super().__init__()
-        self.scaling = scaling
-        self.num_key_value_groups = num_key_value_groups
-        self.num_key_value_heads = num_key_value_heads
-        self.scaling = scaling
-        self.head_dim = linargs[0]
-        glu = MemGLU(num_layer, res, num_key_value_groups, num_key_value_heads, *linargs, **linkwargs)
-        #self.proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 1, bias=False))
-        
-        middim = int(self.head_dim**0.5)
-        self.proj = nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, middim, bias=False), nn.SiLU(inplace=True), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, middim, 1, bias=False)) 
-    
-    def forward(self, queries: torch.Tensor, keys: torch.Tensor):
-        '''
-        k = keys.unflatten(1, (self.num_key_value_heads, 1))
-        q = queries.unflatten(1, (self.num_key_value_heads, self.num_key_value_groups))
-        attn_weights = ((q @ k.transpose(-1, -2)) * self.scaling).flatten(1, 2)
-        #print(k.shape, q.shape)
-        if queries.shape[-2] > 1:
-            causal_mask = torch.tril(torch.ones(*attn_weights.shape[-2:], dtype=torch.bool, device=attn_weights.device))[None, None, :, :]
-            causal_mask = causal_mask.expand(*attn_weights.shape)
-            attn_weights = attn_weights.masked_fill(~causal_mask, -torch.inf)
-        post_sum = torch.logsumexp(attn_weights, dim=-1, keepdim=True)
-        '''
-        memgate = self.proj(queries)
-        return nn.functional.sigmoid(memgate-3) # -post_sum
 
 class GMQwen2Attention(Qwen2Attention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -187,20 +21,7 @@ class GMQwen2Attention(Qwen2Attention):
         super().__init__(config, layer_idx)
         assert self.is_causal, "implemented only for casual LLM"
         self.num_key_value_heads = self.config.num_key_value_heads
-        #glu = CosMemGLU(4, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
-        #glu = MemGLU(2 + int(13 * (layer_idx/63)), True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
-        glu = MemGLU(6, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
-        #self.mem_proj = nn.Sequential(GLU(False, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, 2*self.head_dim, bias=True), GLU(True, self.num_key_value_groups, self.num_key_value_heads, 2*self.head_dim, 2*self.head_dim, bias=True), GLU(False, self.num_key_value_groups, self.num_key_value_heads, 2*self.head_dim, self.head_dim, bias=True))
-        #self.mem_proj = nn.Sequential(glu, GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True))
-        '''    
-        memdim = 2 * self.head_dim
-        self.mem_proj = nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, memdim, bias=False),
-            ResSequential([nn.Sequential(nn.SiLU(inplace=True), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, memdim, bias=False))]),
-            nn.Softmax(dim=-1),
-            ResSequential([nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, memdim, bias=False), nn.SiLU(inplace=True))]),
-            GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, memdim, self.head_dim, bias=False)
-            )
-        '''
+        self.mem_proj = GLU(3, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
         self.gate_proj = GLUGate(2, True, self.scaling, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False)
 
     def forward(
@@ -280,7 +101,6 @@ class GMQwen2Attention(Qwen2Attention):
             memgate2 = (memgate * gate_mask.to(memgate.dtype).unsqueeze(-2).unsqueeze(-1)).transpose(1, 2)
             mem2 = mem.transpose(1, 2)
             attn_output = (1-memgate2) * attn_output + memgate2 * mem2
-            # print("evoke", mem2.requires_grad, flush=True)
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights, memgate
