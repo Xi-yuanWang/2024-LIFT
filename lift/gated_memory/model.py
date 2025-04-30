@@ -205,7 +205,7 @@ class GLUGate(nn.Module):
         self.scaling = scaling
         self.head_dim = linargs[0]
         middim = int(self.head_dim**0.5)
-        self.proj = nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, middim, bias=False), nn.SiLU(inplace=True), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, middim, 1, bias=False)) 
+        self.proj = nn.Sequential(GroupedLinear(self.num_key_value_heads, self.head_dim, middim, bias=False), nn.SiLU(inplace=True), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, middim, 1, bias=False)) 
         self.tailsigmoid = tailsigmoid
     
     def forward(self, queries: torch.Tensor, keys: torch.Tensor=None):
