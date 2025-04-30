@@ -14,7 +14,8 @@ from peft import (
 from typing import Optional
 from copy import deepcopy
 import torch
-from .gated_memory.model_qwen import GMQwen2ForCausalLM
+from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
+from lift.gated_memory.model_qwen import GMQwen2ForCausalLM
 # We assume `peft` is available...
 from transformers.utils import find_adapter_config_file
 

@@ -552,3 +552,51 @@ def train(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrained
             param.grad = None
     torch.cuda.empty_cache()
     return model, tokenizer
+
+
+def train_visgrad(model: PreTrainedModel, dataset: ContextDataset, tokenizer: PreTrainedTokenizer, training_args: TrainingArguments, involve_qa_epochs: int=0, gather_batches: bool=True):
+    """Fine-tune the model and the corresponding tokenizer.
+    Args:
+        model (PreTrainedModel): the model to fine-tune.
+        dataset (ContextDataset): the dataset for fine-tuning.
+        tokenizer (PreTrainedTokenizer): the pretrained tokenizer.
+        training_args (TrainingArguments): the huggingface training arguments.
+        involve_qa_epochs (int): OPTIONAL, default to `0`; the number of epochs to involve QA pairs.
+        gather_batches (bool): OPTIONAL, default to `True`; if `gather_batches=True`, it will force the trainer to update the model only once every epoch; it may lead to more stable gradients.
+    Returns:
+        model_tokenizer_pair (tuple[PreTrainedModel, PreTrainedTokenizer]): the fine-tuned model and the corresponding tokenizer.
+    """
+    # load tokenzier
+    torch.cuda.empty_cache()  # Manually release memory
+    # Load and finetune the model
+    if involve_qa_epochs > 0:
+        dataset.disable_qa()
+    model.train()
+
+    def computegrad(data, model):
+        torch.cuda.empty_cache()
+        out = model.forward(input_ids=data["input_ids"].unsqueeze(0).to(model.device))
+        loss = LabelSmoother()(out, data["labels"].unsqueeze(0).to(model.device), shift_labels=True)
+        loss.backward()
+        ret = {}
+        for n, p in model.named_parameters():
+            if p.grad is not None:
+                ret[n] = p.grad.detach().cpu()
+                p.grad = None
+        return ret
+
+    from transformers.trainer_pt_utils import LabelSmoother
+    allgrads = {}
+    print(model)
+    for data in dataset:
+        torch.cuda.synchronize()
+        print(torch.cuda.max_memory_allocated()/1024**3)
+        grad = computegrad(data, model)
+        torch.cuda.synchronize()
+        print(torch.cuda.max_memory_allocated()/1024**3)
+        for key in grad:
+            if key in allgrads:
+                allgrads[key] = torch.concat((allgrads[key], grad[key].unsqueeze(0)), dim=0)
+            else:
+                allgrads[key] = grad[key].unsqueeze(0)
+    return allgrads

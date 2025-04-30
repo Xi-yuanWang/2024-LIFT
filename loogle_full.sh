@@ -1,35 +1,22 @@
-#!/bin/bash
-#SBATCH -p IAI_SLURM_HGX
-#SBATCH -o logs/%j-loogle-shortqa.out
-#SBATCH -e logs/%j-loogle-shortqa.err
-#SBATCH -c 8
-#SBATCH --gres=gpu:1
-#SBATCH --qos=16gpu-hgx
-#SBATCH -J main_short 
-#SBATCH --nodes=1 
-#SBATCH --time=24:00:00
-source utils.sh
-prepare
-python lift/gated_memory/utils.py
-python scripts/test_loogle_lift_full.py \
+NCCL_P2P_DISABLE="1" NCCL_IB_DISABLE="1" CUDA_VISIBLE_DEVICES=4 python scripts/test_loogle_visgrad.py \
     --input_file shortdep_qa.subset.jsonl \
     --output_file outputs/subset.kvmeml3.smalllr.jsonl \
     --output_dir models/qwentrain.kvmeml3 \
     --overwrite False \
     --num_syn_qa 0 \
     --title_option 1 \
-    --generator_name_or_path /ceph/home/muhan01/huggingfacemodels/Qwen2.5-32B-Instruct \
-    --model_name_or_path /ceph/home/muhan01/huggingfacemodels/LGM0-0x2l3-Qwen2.5-32B-Instruct \
+    --generator_name_or_path /home/wangxiyuan/2024-LIFT/huggingfacemodels/Qwen2.5-0.5B-Instruct \
+    --model_name_or_path /home/wangxiyuan/2024-LIFT/huggingfacemodels/Qwen2.5-0.5B-Instruct \
     --model_max_length 32000 \
     --block_size 256 \
     --len_segment 31 \
     --len_offset 4 \
-    --use_gated_memory True \
-    --load_in_4bit True \
+    --use_gated_memory False \
+    --load_in_4bit False \
     --use_icl False \
     --use_lora False \
     --lora_rank 32 \
-    --use_cot True \
+    --use_cot False \
     --gather_batches False \
     --involve_qa_epochs 0 \
     --num_train_epochs 10 \
@@ -50,5 +37,5 @@ python scripts/test_loogle_lift_full.py \
     --bf16 True \
     --tf32 False \
     --gradient_checkpointing True \
-    --lr_scheduler_type constant
+    --lr_scheduler_type constant > grad.out &
 
