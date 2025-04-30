@@ -13,8 +13,8 @@ class GMLlamaAttention(LlamaAttention):
         super().__init__(config, layer_idx)
         # assert config.num_attention_heads == config.num_key_value_heads, "not implemented for tensor parallel"
         assert self.is_causal, "implemented only for casual LLM"
-        self.mem_proj = nn.Sequential(GLU(3, True, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False), MyRMSNorm())
-        self.gate_proj = GLUGate(2, True, self.scaling, self.num_key_value_groups, self.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailnorm=False, tailsigmoid=False)
+        self.mem_proj = nn.Sequential(GLU(3, True, config.num_key_value_heads, self.head_dim, self.head_dim, bias=True), MyRMSNorm())
+        self.gate_proj = GLUGate(2, True, self.scaling, self.num_key_value_groups, config.num_key_value_heads, self.head_dim, self.head_dim, bias=True, tailsigmoid=False)
 
     def forward(
         self,
