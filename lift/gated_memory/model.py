@@ -197,7 +197,7 @@ class CosMemGLU(GLU):
 
 
 class GLUGate(nn.Module):
-    def __init__(self, num_layer: int, res: bool, scaling: float, num_key_value_groups: int, num_key_value_heads: int, *linargs, **linkwargs):
+    def __init__(self, num_layer: int, res: bool, scaling: float, num_key_value_groups: int, num_key_value_heads: int, *linargs, tailsigmoid=True, **linkwargs):
         super().__init__()
         self.scaling = scaling
         self.num_key_value_groups = num_key_value_groups
@@ -206,6 +206,7 @@ class GLUGate(nn.Module):
         self.head_dim = linargs[0]
         middim = int(self.head_dim**0.5)
         self.proj = nn.Sequential(GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, self.head_dim, middim, bias=False), nn.SiLU(inplace=True), GroupedLinear(self.num_key_value_groups, self.num_key_value_heads, middim, 1, bias=False)) 
+        self.tailsigmoid = tailsigmoid
     
     def forward(self, queries: torch.Tensor, keys: torch.Tensor=None):
         '''
@@ -220,7 +221,10 @@ class GLUGate(nn.Module):
         post_sum = torch.logsumexp(attn_weights, dim=-1, keepdim=True)
         '''
         memgate = self.proj(queries)
-        return nn.functional.sigmoid(memgate-2) # -post_sum
+        if self.tailsigmoid:
+            return nn.functional.sigmoid(memgate-2) # -post_sum
+        else:
+            return memgate
 
 
 class GMLlamaAttention(LlamaAttention):
